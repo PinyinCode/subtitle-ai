@@ -1,0 +1,104 @@
+name: AI Subtitle Generator
+on:
+  push:
+    paths:
+      - 'data/audio/*.m4a'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [process_audio]
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq ffmpeg
+    
+    - name: Install Python packages
+      run: |
+        pip install --quiet --upgrade pip
+        pip install --quiet openai-whisper
+        pip install --quiet deep-translator
+        pip install --quiet pypinyin
+        pip install --quiet PyGithub
+    
+    - name: Find audio files
+      id: find-audio
+      run: |
+        echo "=== Tìm file audio ==="
+        mkdir -p output
+        AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
+        echo "audio_file=$AUDIO" >> $GITHUB_OUTPUT
+        if [ -n "$AUDIO" ]; then
+          echo "Found: $AUDIO"
+        else
+          echo "No audio files found"
+        fi
+    
+    - name: Generate subtitles
+      if: steps.find-audio.outputs.audio_file != ''
+      run: |
+        echo "=== Tạo phụ đề ==="
+        python scripts/generate_subtitles.py
+        echo "=== Kết quả ==="
+        ls -lh output/ 2>/dev/null || echo "No output"
+    
+    - name: Push to Gist (optional)
+      if: always()
+      env:
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+      run: |
+        if [ -n "$GIST_TOKEN" ]; then
+          echo "=== Đẩy lên Gist ==="
+          python scripts/push_to_gist.py
+        else
+          echo "Bỏ qua Gist (chưa cấu hình)"
+        fi
+    
+    - name: Cleanup audio files
+      if: always()
+      run: |
+        echo "=== Dọn dẹp ==="
+        rm -f data/audio/*.m4a
+        rm -f data/audio/*.json
+        touch data/audio/.gitkeep
+        
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add -A
+        
+        if git diff --staged --quiet; then
+          echo "Không có thay đổi"
+        else
+          git commit -m "Auto subtitle + cleanup [skip ci]"
+          git push
+          echo "Đã commit và push"
+        fi
+    
+    - name: Summary
+      if: always()
+      run: |
+        echo "========================================="
+        echo "✅ HOÀN TẤT!"
+        echo "========================================="
+        echo "Files trong output/:"
+        ls -lh output/ 2>/dev/null || echo "  (trống)"
+        echo ""
+        echo "Phụ đề đã sẵn sàng để tải về!"
