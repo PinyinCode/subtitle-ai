@@ -18,6 +18,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -36,6 +38,7 @@ jobs:
         pip install --quiet deep-translator
         pip install --quiet pypinyin
         pip install --quiet PyGithub
+        pip install --quiet requests
     
     - name: Find audio files
       id: find-audio
@@ -43,36 +46,69 @@ jobs:
         mkdir -p output
         AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
         echo "audio_file=$AUDIO" >> $GITHUB_OUTPUT
+        if [ -n "$AUDIO" ]; then
+          echo "Found: $AUDIO"
+        else
+          echo "No audio files found"
+        fi
     
     - name: Generate subtitles
       if: steps.find-audio.outputs.audio_file != ''
-      run: python scripts/generate_subtitles.py
+      run: |
+        echo "=== Generating subtitles ==="
+        python scripts/generate_subtitles.py
+        echo "=== Output files ==="
+        ls -lh output/ 2>/dev/null || echo "No output"
     
     - name: Push to Gist
       if: always()
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: python scripts/push_to_gist.py
+      run: |
+        echo "=== Pushing to Gist ==="
+        if [ -f scripts/push_to_gist.py ]; then
+          python scripts/push_to_gist.py
+        else
+          echo "push_to_gist.py not found, skipping"
+        fi
     
     - name: Cleanup
       if: always()
       run: |
-        # Xóa audio cũ
+        echo "=== Cleanup ==="
+        
+        # Xóa audio files
         rm -f data/audio/*.m4a
         rm -f data/audio/*.json
         touch data/audio/.gitkeep
         
-        # === THÊM: Xóa output cũ (chỉ giữ file mới nhất) ===
-        # Giữ lại .gitkeep
-        touch output/.gitkeep
-        
+        # Cấu hình git
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
+        
+        # Pull latest changes
+        git fetch origin main
+        git checkout main
+        git pull --rebase origin main 2>/dev/null || true
+        
+        # Add và commit
         git add -A
         
         if git diff --staged --quiet; then
-          echo "No changes"
+          echo "No changes to commit"
         else
           git commit -m "Subtitle + cleanup [skip ci]"
-          git push origin main --force
+          git push origin main
+          echo "Pushed successfully"
         fi
+    
+    - name: Summary
+      if: always()
+      run: |
+        echo "========================================="
+        echo "✅ JOB COMPLETE"
+        echo "========================================="
+        echo "Output files:"
+        ls -lh output/ 2>/dev/null || echo "  (empty)"
+        echo ""
+        echo "Audio files cleaned up"
