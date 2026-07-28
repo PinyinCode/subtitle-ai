@@ -3,6 +3,7 @@
 YouTube Subtitle Generator - Whisper AI
 Tao phu de 3 dong: Chinese + Pinyin + Vietnamese
 Encoding: UTF-8 (khong BOM)
+CHI XU LY 1 FILE AUDIO MOI NHAT
 """
 
 import os
@@ -199,7 +200,7 @@ def generate_subtitle(audio_path):
 
 
 def main():
-    """Main function"""
+    """Main function - ONLY process the LATEST audio file"""
     print("\nFinding audio files...")
     
     audio_files = glob.glob("data/audio/*.m4a")
@@ -208,27 +209,27 @@ def main():
         print("No audio files found in data/audio/")
         return
     
-    print(f"Found {len(audio_files)} file(s):")
-    for f in audio_files:
-        print(f"   - {f}")
+    # === SỬA: CHỈ LẤY FILE MỚI NHẤT ===
+    audio_files.sort(key=os.path.getmtime, reverse=True)
+    latest_audio = audio_files[0]
     
-    results = []
-    for audio_file in audio_files:
-        try:
-            result = generate_subtitle(audio_file)
-            if result:
-                results.append(result)
-        except Exception as e:
-            print(f"Error processing {audio_file}: {e}")
-            import traceback
-            traceback.print_exc()
+    print(f"Found {len(audio_files)} file(s), processing ONLY the latest:")
+    print(f"   ▶ {latest_audio}")
     
-    print(f"\nProcessed {len(results)}/{len(audio_files)} file(s)")
+    if len(audio_files) > 1:
+        print(f"   Skipping {len(audio_files)-1} old file(s):")
+        for old in audio_files[1:]:
+            print(f"   - {old}")
     
-    if results:
-        print("Generated files:")
-        for r in results:
-            print(f"   - {r}")
+    # Chỉ xử lý file mới nhất
+    try:
+        result = generate_subtitle(latest_audio)
+        if result:
+            print(f"\nDone: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
