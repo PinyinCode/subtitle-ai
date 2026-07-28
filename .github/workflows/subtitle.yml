@@ -51,18 +51,20 @@ jobs:
     - name: Push to Gist
       if: always()
       env:
-        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-      run: |
-        if [ -n "$GIST_TOKEN" ]; then
-          python scripts/push_to_gist.py
-        fi
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: python scripts/push_to_gist.py
     
     - name: Cleanup
       if: always()
       run: |
+        # Xóa audio cũ
         rm -f data/audio/*.m4a
         rm -f data/audio/*.json
         touch data/audio/.gitkeep
+        
+        # === THÊM: Xóa output cũ (chỉ giữ file mới nhất) ===
+        # Giữ lại .gitkeep
+        touch output/.gitkeep
         
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
