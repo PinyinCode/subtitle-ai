@@ -18,38 +18,22 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
-    # Cache pip packages
-    - uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: pip-${{ runner.os }}-v1
-        restore-keys: pip-${{ runner.os }}-
-    
-    # Cache Whisper model
-    - uses: actions/cache@v4
-      with:
-        path: ~/.cache/whisper
-        key: whisper-base-${{ runner.os }}
-    
     - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
     - run: pip install --quiet openai-whisper deep-translator pypinyin requests
-    
     - run: |
         mkdir -p output
         AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
         if [ -n "$AUDIO" ]; then python scripts/generate_subtitles.py; fi
-    
     - env:
-        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
       if: always()
-      run: python scripts/push_to_gist.py
-    
+      run: python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
     - if: always()
       run: |
         rm -f data/audio/*.m4a data/audio/*.json
         touch data/audio/.gitkeep
-        rm -f output/*.vtt output/*_summary.json
+        ls -t output/*.vtt 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
+        ls -t output/*_summary.json 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
         touch output/.gitkeep
         git config user.name "Actions"
         git config user.email "actions@github.com"
