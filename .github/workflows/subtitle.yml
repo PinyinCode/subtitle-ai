@@ -17,7 +17,7 @@ jobs:
       image: ghcr.io/pinyincode/subtitle-ai:latest
       credentials:
         username: ${{ github.actor }}
-        password: ${{ secrets.GIST_TOKEN }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - uses: actions/checkout@v4
     
