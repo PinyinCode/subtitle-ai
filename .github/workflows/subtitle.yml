@@ -7,54 +7,34 @@ on:
   repository_dispatch:
     types:
     - process_audio
-
 permissions:
   contents: write
-
 jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Setup Python
-      uses: actions/setup-python@v5
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-    
-    - name: Install dependencies
-      run: |
-        pip install faster-whisper openai-whisper
-        pip install youtube-dl yt-dlp
-        pip install pypinyin python-dotenv
-    
-    - name: Generate Subtitles
-      run: |
+    - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+    - run: pip install --quiet openai-whisper deep-translator pypinyin requests
+    - run: |
         mkdir -p output
         AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
-        if [ -n "$AUDIO" ]; then 
-          echo "Processing: $AUDIO"
-          python scripts/generate_subtitles.py
-        else
-          echo "No audio files found"
-        fi
-    
-    - name: Push to Gist
-      env:
-        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        if [ -n "$AUDIO" ]; then python scripts/generate_subtitles.py; fi
+    - env:
+        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
       if: always()
-      run: python scripts/push_to_gist.py
-    
-    - name: Cleanup
-      if: always()
+      run: python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
+    - if: always()
       run: |
         rm -f data/audio/*.m4a data/audio/*.json
         touch data/audio/.gitkeep
-        rm -f output/*.vtt output/*_summary.json
+        ls -t output/*.vtt 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
+        ls -t output/*_summary.json 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
         touch output/.gitkeep
-        
         git config user.name "Actions"
         git config user.email "actions@github.com"
         git add -A
