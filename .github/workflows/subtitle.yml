@@ -13,21 +13,24 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    container:
+      image: ghcr.io/pinyincode/subtitle-ai:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-    - run: pip install --quiet openai-whisper deep-translator pypinyin requests
+    
     - run: |
         mkdir -p output
         AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
         if [ -n "$AUDIO" ]; then python scripts/generate_subtitles.py; fi
+    
     - env:
-        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
       if: always()
-      run: python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
+      run: python scripts/push_to_gist.py
+    
     - if: always()
       run: |
         rm -f data/audio/*.m4a data/audio/*.json
