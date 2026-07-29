@@ -37,7 +37,6 @@ jobs:
         pip install --quiet openai-whisper
         pip install --quiet deep-translator
         pip install --quiet pypinyin
-        pip install --quiet PyGithub
         pip install --quiet requests
     
     - name: Find audio files
@@ -46,69 +45,39 @@ jobs:
         mkdir -p output
         AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
         echo "audio_file=$AUDIO" >> $GITHUB_OUTPUT
-        if [ -n "$AUDIO" ]; then
-          echo "Found: $AUDIO"
-        else
-          echo "No audio files found"
-        fi
     
     - name: Generate subtitles
       if: steps.find-audio.outputs.audio_file != ''
-      run: |
-        echo "=== Generating subtitles ==="
-        python scripts/generate_subtitles.py
-        echo "=== Output files ==="
-        ls -lh output/ 2>/dev/null || echo "No output"
+      run: python scripts/generate_subtitles.py
     
     - name: Push to Gist
       if: always()
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "=== Pushing to Gist ==="
         if [ -f scripts/push_to_gist.py ]; then
-          python scripts/push_to_gist.py
-        else
-          echo "push_to_gist.py not found, skipping"
+          python scripts/push_to_gist.py || echo "Gist push skipped"
         fi
     
     - name: Cleanup
       if: always()
       run: |
-        echo "=== Cleanup ==="
-        
-        # Xóa audio files
         rm -f data/audio/*.m4a
         rm -f data/audio/*.json
         touch data/audio/.gitkeep
         
-        # Cấu hình git
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        
-        # Pull latest changes
-        git fetch origin main
-        git checkout main
-        git pull --rebase origin main 2>/dev/null || true
-        
-        # Add và commit
         git add -A
         
         if git diff --staged --quiet; then
-          echo "No changes to commit"
+          echo "No changes"
         else
           git commit -m "Subtitle + cleanup [skip ci]"
-          git push origin main
-          echo "Pushed successfully"
+          git push origin main 2>/dev/null || (
+            git fetch origin main
+            git reset --soft origin/main
+            git commit -m "Subtitle + cleanup [skip ci]"
+            git push origin main
+          )
         fi
-    
-    - name: Summary
-      if: always()
-      run: |
-        echo "========================================="
-        echo "✅ JOB COMPLETE"
-        echo "========================================="
-        echo "Output files:"
-        ls -lh output/ 2>/dev/null || echo "  (empty)"
-        echo ""
-        echo "Audio files cleaned up"
