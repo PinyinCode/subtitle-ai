@@ -13,13 +13,27 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    container:
-      image: ghcr.io/pinyincode/subtitle-ai:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    # Cache pip packages
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: pip-${{ runner.os }}-v1
+        restore-keys: pip-${{ runner.os }}-
+    
+    # Cache Whisper model
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/whisper
+        key: whisper-base-${{ runner.os }}
+    
+    - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+    - run: pip install --quiet openai-whisper deep-translator pypinyin requests
     
     - run: |
         mkdir -p output
