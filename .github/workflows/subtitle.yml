@@ -25,7 +25,7 @@ jobs:
         AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
         if [ -n "$AUDIO" ]; then python scripts/generate_subtitles.py; fi
     - env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
       if: always()
       run: python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
     - if: always()
