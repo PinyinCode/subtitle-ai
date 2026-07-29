@@ -33,11 +33,15 @@ jobs:
     
     - if: always()
       run: |
+        # Xóa audio
         rm -f data/audio/*.m4a data/audio/*.json
         touch data/audio/.gitkeep
-        ls -t output/*.vtt 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
-        ls -t output/*_summary.json 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
+        
+        # Xóa TẤT CẢ output (đã push Gist rồi, ko cần giữ)
+        rm -f output/*.vtt
+        rm -f output/*_summary.json
         touch output/.gitkeep
+        
         git config user.name "Actions"
         git config user.email "actions@github.com"
         git add -A
