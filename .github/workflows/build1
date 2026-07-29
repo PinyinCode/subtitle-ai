@@ -1,0 +1,41 @@
+name: AI Subtitle Generator
+on:
+  push:
+    paths:
+    - data/audio/*.m4a
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+    - process_audio
+permissions:
+  contents: write
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+    - run: pip install --quiet openai-whisper deep-translator pypinyin requests
+    - run: |
+        mkdir -p output
+        AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
+        if [ -n "$AUDIO" ]; then python scripts/generate_subtitles.py; fi
+    - env:
+        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+      if: always()
+      run: python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
+    - if: always()
+      run: |
+        rm -f data/audio/*.m4a data/audio/*.json
+        touch data/audio/.gitkeep
+        ls -t output/*.vtt 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
+        ls -t output/*_summary.json 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
+        touch output/.gitkeep
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add -A
+        git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push) || echo "Push skipped"
