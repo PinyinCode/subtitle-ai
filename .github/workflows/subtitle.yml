@@ -1,4 +1,5 @@
- name: AI Subtitle Generator
+name: AI Subtitle Generator
+
 on:
   push:
     paths:
@@ -14,23 +15,64 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - run: pip install --quiet openai-whisper deep-translator pypinyin requests
-      - run: |
-          mkdir -p output
-          AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
-          if [ -n "$AUDIO" ]; then
-            python scripts/generate_subtitles.py
-          fi
-      - run: |
-          rm -f data/audio/*.m4a data/audio/*.json
-          touch data/audio/.gitkeep
-          git config user.name "Actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push)
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq ffmpeg
+    
+    - name: Install Python packages
+      run: |
+        pip install --quiet --upgrade pip
+        pip install --quiet openai-whisper
+        pip install --quiet deep-translator
+        pip install --quiet pypinyin
+        pip install --quiet requests
+    
+    - name: Find and process audio
+      run: |
+        mkdir -p output
+        AUDIO=$(find data/audio -name "*.m4a" -type f | head -1)
+        if [ -n "$AUDIO" ]; then
+          echo "Processing: $AUDIO"
+          python scripts/generate_subtitles.py
+        else
+          echo "No audio files found"
+        fi
+    
+    - name: Push to Gist
+      if: always()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if [ -f scripts/push_to_gist.py ]; then
+          python scripts/push_to_gist.py || echo "Gist push skipped"
+        fi
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f data/audio/*.m4a
+        rm -f data/audio/*.json
+        touch data/audio/.gitkeep
+        
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add -A
+        
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Add subtitle + cleanup [skip ci]"
+          git pull --rebase origin main 2>/dev/null || true
+          git push origin main 2>/dev/null || echo "Push failed, will retry next run"
+        fi
