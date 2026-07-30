@@ -7,8 +7,10 @@ CHI XU LY 1 FILE AUDIO MOI NHAT
 """
 
 import os
+import sys
 import json
 import glob
+import argparse
 from pathlib import Path
 from datetime import datetime
 
@@ -40,20 +42,25 @@ def format_time(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-def generate_subtitle(audio_path):
+def generate_subtitle(audio_path, output_path=None):
     """Generate VTT subtitle from audio file"""
     
     audio_file = Path(audio_path)
     video_id = audio_file.stem
     
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-    
-    output_file = output_dir / f"{video_id}.vtt"
+    # Nếu không chỉ định output, dùng thư mục mặc định
+    if output_path is None:
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+        output_file = output_dir / f"{video_id}.vtt"
+    else:
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'='*50}")
     print(f"Processing: {video_id}")
     print(f"Audio: {audio_path}")
+    print(f"Output: {output_file}")
     print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
@@ -182,7 +189,7 @@ def generate_subtitle(audio_path):
         'timestamp': datetime.now().isoformat()
     }
     
-    summary_file = output_dir / f"{video_id}_summary.json"
+    summary_file = output_file.parent / f"{video_id}_summary.json"
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     
@@ -199,37 +206,55 @@ def generate_subtitle(audio_path):
     return str(output_file)
 
 
-# ===== HÀM MAIN MỚI - CHỈ XỬ LÝ 1 FILE =====
+# ===== HÀM MAIN =====
 def main():
-    """Main function - ONLY process the LATEST audio file"""
-    print("\nFinding audio files...")
+    """Main function - Process audio file"""
+    parser = argparse.ArgumentParser(description='Generate subtitles from audio')
+    parser.add_argument('--audio', help='Path to audio file (specific file)')
+    parser.add_argument('--output', help='Path to output VTT file')
+    parser.add_argument('--latest', action='store_true', help='Process only the latest file')
     
+    args = parser.parse_args()
+    
+    # Nếu có chỉ định file cụ thể
+    if args.audio:
+        audio_path = args.audio
+        if not os.path.exists(audio_path):
+            print(f"❌ Audio file not found: {audio_path}")
+            return
+        
+        output_path = args.output if args.output else None
+        result = generate_subtitle(audio_path, output_path)
+        if result:
+            print(f"\n✅ Done: {result}")
+        return
+    
+    # Nếu không chỉ định file, tìm file mới nhất
+    print("\n🔍 Finding audio files...")
     audio_files = glob.glob("data/audio/*.m4a")
     
     if not audio_files:
-        print("No audio files found in data/audio/")
+        print("❌ No audio files found in data/audio/")
         return
     
     # Sắp xếp theo thời gian sửa đổi, lấy file mới nhất
     audio_files.sort(key=os.path.getmtime, reverse=True)
     latest_audio = audio_files[0]
     
-    print(f"Found {len(audio_files)} file(s), processing ONLY the latest:")
-    print(f"   >> {latest_audio}")
+    print(f"Found {len(audio_files)} file(s)")
+    print(f"📌 Processing latest: {latest_audio}")
     
     # Bỏ qua các file cũ
     if len(audio_files) > 1:
-        print(f"   Skipping {len(audio_files)-1} old file(s):")
-        for old in audio_files[1:]:
-            print(f"   - {old}")
+        print(f"   Skipping {len(audio_files)-1} old file(s)")
     
     # Chỉ xử lý 1 file
     try:
         result = generate_subtitle(latest_audio)
         if result:
-            print(f"\nDone: {result}")
+            print(f"\n✅ Done: {result}")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
 
