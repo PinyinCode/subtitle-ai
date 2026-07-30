@@ -11,7 +11,7 @@ on:
 
 permissions:
   contents: write
-  packages: read  # ✅ Thêm để pull Docker image từ ghcr.io
+  packages: read
 
 jobs:
   generate:
@@ -21,7 +21,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    # ✅ 1. LOGIN VÀO GHCR (GitHub Container Registry)
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
       with:
@@ -29,134 +28,47 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     
-    # ✅ 2. PULL DOCKER IMAGE ĐÃ BUILD SẴN
     - name: Pull AI Docker image
       run: |
         docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
         echo "✅ Docker image ready"
     
-    # ✅ 3. TẠO THƯ MỤC CẦN THIẾT
-    - name: Create directories
-      run: |
-        mkdir -p output
-        mkdir -p data/audio
-        mkdir -p scripts
-    
-    # ✅ 4. CHẠY AI PROCESSING TRONG DOCKER
-    - name: Process audio with AI (Docker)
+    - name: Process audio with AI
       run: |
         # Tìm file audio mới nhất
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
         
         if [ -n "$AUDIO_FILE" ]; then
-          echo "🎬 Processing: $AUDIO_FILE"
-          
-          # Lấy video_id từ tên file
           VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
+          echo "🎬 Processing: $VIDEO_ID"
           
-          # Chạy Docker với volume mount
+          # Chạy Docker với script của bạn
           docker run --rm \
-            -v $(pwd)/data/audio:/app/audio \
-            -v $(pwd)/output:/app/output \
-            -v $(pwd)/scripts:/app/scripts \
+            -v $(pwd):/app \
+            -w /app \
             ghcr.io/pinyincode/subtitle-ai:latest \
             python scripts/generate_subtitles.py \
-            --audio "/app/audio/${VIDEO_ID}.m4a" \
+            --audio "/app/$AUDIO_FILE" \
             --output "/app/output/${VIDEO_ID}.vtt"
           
-          echo "✅ Processing completed for: $VIDEO_ID"
+          echo "✅ Processing completed"
         else
-          echo "ℹ️ No audio file found to process"
+          echo "ℹ️ No audio file found"
         fi
     
-    # ✅ 5. UPLOAD LÊN GIST
-    - name: Upload subtitle to Gist
+    - name: Upload to Gist
       if: always()
       env:
         GH_TOKEN: ${{ secrets.GIST_TOKEN }}
       run: |
-        # Copy script nếu chưa có
-        cat > scripts/push_to_gist.py << 'EOF'
-        import os
-        import json
-        import base64
-        import requests
-        from pathlib import Path
-        
-        GIST_TOKEN = os.environ.get('GH_TOKEN', '')
-        if not GIST_TOKEN:
-            print("⚠️ No GIST_TOKEN found")
-            exit(0)
-        
-        # Tìm file .vtt mới nhất
-        output_dir = Path('output')
-        vtt_files = list(output_dir.glob('*.vtt'))
-        
-        if not vtt_files:
-            print("⚠️ No .vtt files found")
-            exit(0)
-        
-        # Lấy file mới nhất
-        vtt_file = max(vtt_files, key=lambda x: x.stat().st_mtime)
-        video_id = vtt_file.stem
-        
-        print(f"📤 Uploading: {video_id}")
-        
-        # Đọc nội dung file
-        with open(vtt_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Tạo Gist
-        headers = {
-            'Authorization': f'token {GIST_TOKEN}',
-            'Accept': 'application/vnd.github.v3+json'
-        }
-        
-        # Kiểm tra Gist đã tồn tại chưa
-        resp = requests.get('https://api.github.com/gists', headers=headers)
-        if resp.status_code == 200:
-            for gist in resp.json():
-                if gist.get('files', {}).get(f'{video_id}.vtt'):
-                    print(f"✅ Gist already exists: {gist['html_url']}")
-                    exit(0)
-        
-        # Tạo Gist mới
-        data = {
-            'description': f'Pinyin AI Subtitle - {video_id}',
-            'public': False,
-            'files': {
-                f'{video_id}.vtt': {
-                    'content': content
-                }
-            }
-        }
-        
-        resp = requests.post('https://api.github.com/gists', 
-                            headers=headers, 
-                            json=data)
-        
-        if resp.status_code == 201:
-            gist_url = resp.json()['html_url']
-            print(f"✅ Gist created: {gist_url}")
-        else:
-            print(f"❌ Failed to create Gist: {resp.status_code}")
-            print(resp.text)
-        EOF
-        
-        python scripts/push_to_gist.py
+        python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
     
-    # ✅ 6. DỌN DẸP
     - name: Cleanup
       if: always()
       run: |
-        # Xóa audio đã xử lý
         rm -f data/audio/*.m4a
         touch data/audio/.gitkeep
         
-        # Giữ lại 5 file .vtt gần nhất
-        ls -t output/*.vtt 2>/dev/null | tail -n +2 | xargs rm -f 2>/dev/null || true
-        
-        # Git commit cleanup
         git config user.name "Actions"
         git config user.email "actions@github.com"
         git add -A
