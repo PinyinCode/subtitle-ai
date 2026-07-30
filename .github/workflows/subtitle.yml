@@ -40,6 +40,7 @@ jobs:
         if [ -n "$AUDIO_FILE" ]; then
           VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
           echo "🎬 Processing: $VIDEO_ID"
+          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
           
           docker run --rm \
             -v $(pwd):/app \
@@ -50,18 +51,21 @@ jobs:
             --output "/app/output/${VIDEO_ID}.vtt"
           
           echo "✅ Processing completed"
+          echo "has_audio=true" >> $GITHUB_OUTPUT
         else
           echo "ℹ️ No audio file found"
+          echo "has_audio=false" >> $GITHUB_OUTPUT
         fi
     
+    # ✅ 1. UPLOAD TRƯỚC
     - name: Upload subtitle to Gist
-      if: always()
+      if: steps.process.outputs.has_audio == 'true'
       env:
         GH_TOKEN: ${{ secrets.GIST_TOKEN }}
       run: |
         python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
     
-    # ✅ SỬA: XÓA TẤT CẢ FILE VTT VÀ JSON
+    # ✅ 2. SAU ĐÓ MỚI CLEANUP
     - name: Cleanup
       if: always()
       run: |
@@ -69,7 +73,7 @@ jobs:
         rm -f data/audio/*.m4a
         touch data/audio/.gitkeep
         
-        # ✅ XÓA TẤT CẢ FILE .vtt VÀ .json TRONG OUTPUT
+        # Xóa file .vtt và .json trong output
         rm -f output/*.vtt
         rm -f output/*_summary.json
         touch output/.gitkeep
