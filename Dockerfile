@@ -7,23 +7,24 @@ RUN apt-get update && \
     git \
     ca-certificates \
     curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Cài Python packages
+# ✅ Cài Faster-Whisper (thay vì openai-whisper)
 RUN pip install --no-cache-dir \
-    openai-whisper \
+    faster-whisper \
     deep-translator \
     pypinyin \
     requests \
     PyGithub
 
-# Pre-download Whisper model base
-RUN python -c "import whisper; whisper.load_model('base')"
+# ✅ Pre-download Faster-Whisper model medium (chất lượng cao, nhanh hơn)
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('medium', device='cpu', compute_type='int8')"
 
 # Thư mục làm việc
 WORKDIR /app
 
 # Verify cài đặt
-RUN python -c "import whisper; print('Whisper OK')" && \
+RUN python -c "from faster_whisper import WhisperModel; print('Faster-Whisper OK')" && \
     ffmpeg -version | head -1 && \
     git --version
