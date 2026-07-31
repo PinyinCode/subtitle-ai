@@ -78,7 +78,7 @@ def kill_process_by_video_id(video_id):
 
 # ===== UPLOAD BẰNG GIT (FORCE ADD + PULL TRƯỚC + LOG CHI TIẾT) =====
 def upload_to_github(file_path, video_id):
-    """Upload file lên GitHub bằng Git - Force add, pull trước push, log chi tiết"""
+    """Upload file lên GitHub bằng Git - Force add, pull trước push"""
     try:
         import subprocess
         import shutil
@@ -86,20 +86,17 @@ def upload_to_github(file_path, video_id):
         print(f"\n{'='*50}")
         print(f"[UPLOAD-GIT] === BẮT ĐẦU UPLOAD: {video_id} ===")
         print(f"[UPLOAD-GIT] Thời gian: {time.strftime('%H:%M:%S')}")
-        print(f"[UPLOAD-GIT] File path: {file_path}")
         
         if not os.path.exists(file_path):
             print(f"[UPLOAD-GIT] ❌ File không tồn tại: {file_path}")
             return False
         
         file_size = os.path.getsize(file_path)
-        print(f"[UPLOAD-GIT] ✅ File size: {file_size/1024:.1f}KB / {file_size/1024/1024:.2f}MB")
+        print(f"[UPLOAD-GIT] ✅ File size: {file_size/1024:.1f}KB")
         
         token = server_config.get('token', '')
         if not token:
             print(f"[UPLOAD-GIT] ❌ Không có token!")
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.update_progress, 0, "❌ Chưa cấu hình token!")
             return False
         
         repo_path = os.path.dirname(os.path.abspath(__file__))
@@ -110,93 +107,25 @@ def upload_to_github(file_path, video_id):
         shutil.copy2(file_path, dest_file)
         print(f"[UPLOAD-GIT] ✅ Copied to: {dest_file}")
         
-        # ✅ KIỂM TRA FILE ĐÃ COPY THÀNH CÔNG
-        if os.path.exists(dest_file):
-            print(f"[UPLOAD-GIT] ✅ File tồn tại: {dest_file} ({os.path.getsize(dest_file)/1024:.1f}KB)")
-        else:
-            print(f"[UPLOAD-GIT] ❌ File KHÔNG tồn tại sau khi copy!")
-            return False
+        # ✅ 1. GIT PULL
+        print(f"[UPLOAD-GIT] 📤 Git pull...")
+        subprocess.run(['git', 'pull', '--rebase'], cwd=repo_path, capture_output=True)
         
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 20, "📤 Git pull...")
+        # ✅ 2. GIT ADD - FORCE ADD
+        print(f"[UPLOAD-GIT] 📤 Git add -f...")
+        subprocess.run(['git', 'add', '-f', 'data/audio/'], cwd=repo_path, capture_output=True)
         
-        # ✅ 1. GIT PULL TRƯỚC
-        print(f"[UPLOAD-GIT] 📤 Git pull (đồng bộ remote)...")
-        pull_result = subprocess.run(
-            ['git', 'pull', '--rebase'], 
-            cwd=repo_path, 
-            capture_output=True, 
-            text=True
-        )
-        print(f"[UPLOAD-GIT] Git pull return code: {pull_result.returncode}")
-        if pull_result.returncode != 0:
-            print(f"[UPLOAD-GIT] ⚠️ Git pull warning: {pull_result.stderr[:200]}")
-        
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 40, "📤 Git add -f...")
-        
-        # ✅ 2. GIT ADD - FORCE ADD (vượt qua .gitignore)
-        print(f"[UPLOAD-GIT] 📤 Git add -f (force add)...")
-        
-        # Cách 1: Add file cụ thể với -f
-        result = subprocess.run(
-            ['git', 'add', '-f', dest_file], 
-            cwd=repo_path, 
-            capture_output=True, 
-            text=True
-        )
-        print(f"[UPLOAD-GIT] Git add file return code: {result.returncode}")
-        if result.returncode != 0:
-            print(f"[UPLOAD-GIT] ⚠️ Git add file error: {result.stderr[:200]}")
-        
-        # Cách 2: Add cả thư mục với -f (để chắc chắn)
-        result2 = subprocess.run(
-            ['git', 'add', '-f', 'data/audio/'], 
-            cwd=repo_path, 
-            capture_output=True, 
-            text=True
-        )
-        print(f"[UPLOAD-GIT] Git add folder return code: {result2.returncode}")
-        if result2.returncode != 0:
-            print(f"[UPLOAD-GIT] ⚠️ Git add folder error: {result2.stderr[:200]}")
-        
-        # ✅ KIỂM TRA STATUS SAU KHI ADD
-        status_result = subprocess.run(
-            ['git', 'status', '--porcelain'], 
-            cwd=repo_path, 
-            capture_output=True, 
-            text=True
-        )
-        print(f"[UPLOAD-GIT] 📊 Git status sau khi add:")
-        print(status_result.stdout)
-        
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 60, "📤 Git commit...")
-        
-        # ✅ 3. GIT COMMIT
+        # ✅ 3. GIT COMMIT - CHO PHÉP EMPTY
         print(f"[UPLOAD-GIT] 📤 Git commit...")
         result = subprocess.run(
-            ['git', 'commit', '-m', f'Upload audio {video_id}'], 
+            ['git', 'commit', '-m', f'Upload audio {video_id}', '--allow-empty'], 
             cwd=repo_path, 
             capture_output=True, 
             text=True
         )
-        print(f"[UPLOAD-GIT] Git commit return code: {result.returncode}")
-        if result.returncode != 0:
-            print(f"[UPLOAD-GIT] Commit stderr: {result.stderr[:300]}")
-        
-        if result.returncode != 0 and 'nothing to commit' in result.stderr:
-            print(f"[UPLOAD-GIT] ⚠️ Không có gì để commit (file đã tồn tại hoặc không thay đổi)")
-            # Vẫn tiếp tục, có thể file đã được commit từ trước
-        elif result.returncode != 0:
-            print(f"[UPLOAD-GIT] ❌ Commit error: {result.stderr}")
-            return False
-        
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 80, "📤 Git push...")
         
         # ✅ 4. GIT PUSH
-        print(f"[UPLOAD-GIT] 📤 Git push (không giới hạn thời gian)...")
+        print(f"[UPLOAD-GIT] 📤 Git push...")
         result = subprocess.run(
             ['git', 'push'], 
             cwd=repo_path, 
@@ -204,14 +133,10 @@ def upload_to_github(file_path, video_id):
             text=True, 
             timeout=600
         )
-        print(f"[UPLOAD-GIT] Git push return code: {result.returncode}")
         
-        # ✅ 5. NẾU PUSH THẤT BẠI DO REJECTED, THỬ PULL + PUSH LẠI
         if result.returncode != 0 and 'rejected' in result.stderr:
             print(f"[UPLOAD-GIT] ⚠️ Push bị từ chối, thử pull và push lại...")
-            
             subprocess.run(['git', 'pull', '--rebase'], cwd=repo_path, capture_output=True)
-            
             result = subprocess.run(
                 ['git', 'push'], 
                 cwd=repo_path, 
@@ -219,51 +144,41 @@ def upload_to_github(file_path, video_id):
                 text=True, 
                 timeout=600
             )
-            print(f"[UPLOAD-GIT] Git push retry return code: {result.returncode}")
         
         if result.returncode != 0:
-            print(f"[UPLOAD-GIT] ❌ Push error: {result.stderr[:300]}")
+            print(f"[UPLOAD-GIT] ❌ Push error: {result.stderr}")
             return False
         
         print(f"[UPLOAD-GIT] ✅ Push thành công!")
         
-        # ✅ 6. KÍCH HOẠT GITHUB ACTIONS
+        # Kích hoạt Actions
         try:
             import requests
             headers = {
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github.v3+json"
             }
-            resp = requests.post(
+            requests.post(
                 f"https://api.github.com/repos/PinyinCode/subtitle-ai/dispatches",
                 headers=headers,
                 json={"event_type": "process_audio", "client_payload": {"video_id": video_id}},
                 timeout=30
             )
-            if resp.status_code == 204:
-                print(f"[UPLOAD-GIT] ✅ Actions triggered!")
-            else:
-                print(f"[UPLOAD-GIT] ⚠️ Actions trigger: {resp.status_code}")
-        except Exception as e:
-            print(f"[UPLOAD-GIT] ⚠️ Actions trigger error: {e}")
+        except:
+            pass
         
         if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 100, "✅ Hoàn tất! Đợi AI xử lý...")
+            gui_ref.root.after(0, gui_ref.update_progress, 100, "✅ Hoàn tất!")
             gui_ref.root.after(0, gui_ref.add_history, video_id, "✅ Upload thành công")
         
         print(f"[UPLOAD-GIT] === HOÀN TẤT: {video_id} ===")
-        print(f"{'='*50}\n")
         return True
             
-    except subprocess.TimeoutExpired:
-        print(f"[UPLOAD-GIT] ❌ Push timeout (600s)!")
-        return False
     except Exception as e:
         print(f"[UPLOAD-GIT] ❌ Lỗi: {e}")
         import traceback
         traceback.print_exc()
         return False
-
 def progress_hook_factory(video_id):
     def progress_hook(d):
         if d['status'] == 'downloading':
@@ -289,7 +204,7 @@ def progress_hook_factory(video_id):
 
 # ===== HÀM XỬ LÝ NGẦM =====
 def process_download_background(url, video_id):
-    """Tải audio + Upload bằng Git (không timeout)"""
+    """Tải audio + Tự động Git push + Xóa file sau khi push"""
     tmp_file = None
     cancel_event = threading.Event()
     active_downloads[video_id] = cancel_event
@@ -349,32 +264,154 @@ def process_download_background(url, video_id):
         
         print(f"Downloaded: {os.path.getsize(tmp_file)/1024:.0f}KB")
         
-        # === UPLOAD BẰNG GIT ===
-        upload_success = upload_to_github(tmp_file, video_id)
+        # ===== TỰ ĐỘNG GIT PUSH =====
+        if gui_ref:
+            gui_ref.root.after(0, gui_ref.update_progress, 30, "📤 Copy file vào repo...")
         
-        # Dọn dẹp
-        try:
-            if os.path.exists(tmp_file):
-                os.remove(tmp_file)
-        except:
-            pass
+        repo_path = os.path.dirname(os.path.abspath(__file__))
+        audio_dir = os.path.join(repo_path, 'data', 'audio')
+        os.makedirs(audio_dir, exist_ok=True)
         
-        if upload_success:
+        dest_file = os.path.join(audio_dir, f"{video_id}.m4a")
+        shutil.copy2(tmp_file, dest_file)
+        print(f"[AUTO] ✅ Copied to: {dest_file}")
+        
+        if gui_ref:
+            gui_ref.root.after(0, gui_ref.update_progress, 50, "📤 Git pull...")
+        
+        # ✅ 1. GIT PULL
+        print(f"[AUTO-PUSH] 📤 Git pull...")
+        pull_result = subprocess.run(
+            ['git', 'pull', '--rebase'], 
+            cwd=repo_path, 
+            capture_output=True, 
+            text=True
+        )
+        if pull_result.returncode != 0:
+            print(f"[AUTO-PUSH] ⚠️ Git pull warning: {pull_result.stderr[:200]}")
+        
+        if gui_ref:
+            gui_ref.root.after(0, gui_ref.update_progress, 60, "📤 Git add...")
+        
+        # ✅ 2. GIT ADD - FORCE ADD
+        print(f"[AUTO-PUSH] 📤 Git add -f...")
+        add_result = subprocess.run(
+            ['git', 'add', '-f', dest_file], 
+            cwd=repo_path, 
+            capture_output=True, 
+            text=True
+        )
+        if add_result.returncode != 0:
+            print(f"[AUTO-PUSH] ⚠️ Git add warning: {add_result.stderr[:200]}")
+        
+        if gui_ref:
+            gui_ref.root.after(0, gui_ref.update_progress, 75, "📤 Git commit...")
+        
+        # ✅ 3. GIT COMMIT
+        print(f"[AUTO-PUSH] 📤 Git commit...")
+        commit_result = subprocess.run(
+            ['git', 'commit', '-m', f'Upload audio {video_id}', '--allow-empty'], 
+            cwd=repo_path, 
+            capture_output=True, 
+            text=True
+        )
+        if commit_result.returncode != 0:
+            print(f"[AUTO-PUSH] ⚠️ Git commit warning: {commit_result.stderr[:200]}")
+        
+        if gui_ref:
+            gui_ref.root.after(0, gui_ref.update_progress, 85, "📤 Git push...")
+        
+        # ✅ 4. GIT PUSH
+        print(f"[AUTO-PUSH] 📤 Git push...")
+        push_result = subprocess.run(
+            ['git', 'push'], 
+            cwd=repo_path, 
+            capture_output=True, 
+            text=True, 
+            timeout=600
+        )
+        
+        # ✅ 5. NẾU PUSH THẤT BẠI DO REJECTED, THỬ LẠI
+        if push_result.returncode != 0 and 'rejected' in push_result.stderr:
+            print(f"[AUTO-PUSH] ⚠️ Push bị từ chối, thử pull và push lại...")
+            subprocess.run(['git', 'pull', '--rebase'], cwd=repo_path, capture_output=True)
+            push_result = subprocess.run(
+                ['git', 'push'], 
+                cwd=repo_path, 
+                capture_output=True, 
+                text=True, 
+                timeout=600
+            )
+        
+        # ✅ KIỂM TRA KẾT QUẢ VÀ XÓA FILE
+        if push_result.returncode == 0:
+            print(f"[AUTO-PUSH] ✅ Đã push {video_id} lên GitHub")
+            
+            # Kích hoạt GitHub Actions
+            try:
+                import requests
+                token = server_config.get('token', '')
+                if token:
+                    headers = {
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github.v3+json"
+                    }
+                    resp = requests.post(
+                        f"https://api.github.com/repos/PinyinCode/subtitle-ai/dispatches",
+                        headers=headers,
+                        json={"event_type": "process_audio", "client_payload": {"video_id": video_id}},
+                        timeout=30
+                    )
+                    if resp.status_code == 204:
+                        print(f"[AUTO-PUSH] ✅ Actions triggered!")
+                    else:
+                        print(f"[AUTO-PUSH] ⚠️ Actions trigger: {resp.status_code}")
+            except Exception as e:
+                print(f"[AUTO-PUSH] ⚠️ Actions trigger error: {e}")
+            
+            # ✅ XÓA FILE SAU KHI PUSH THÀNH CÔNG
+            try:
+                if os.path.exists(dest_file):
+                    os.remove(dest_file)
+                    print(f"[AUTO-PUSH] 🗑️ Đã xóa file local: {dest_file}")
+            except Exception as e:
+                print(f"[AUTO-PUSH] ⚠️ Không thể xóa file: {e}")
+            
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+                    print(f"[AUTO-PUSH] 🗑️ Đã xóa file tạm: {tmp_file}")
+            except:
+                pass
+            
+            if gui_ref:
+                gui_ref.root.after(0, gui_ref.update_progress, 100, "✅ Hoàn tất! Đợi AI xử lý...")
+                gui_ref.root.after(0, gui_ref.add_history, video_id, "✅ Upload thành công")
+            
             download_history.append({
                 'video_id': video_id,
                 'status': 'success',
                 'time': time.strftime('%H:%M:%S')
             })
-            print(f"[COMPLETE] Success: {video_id}")
         else:
+            print(f"[AUTO-PUSH] ❌ Push thất bại: {push_result.stderr[:300]}")
+            # ❌ KHÔNG XÓA FILE NẾU PUSH THẤT BẠI
+            if gui_ref:
+                gui_ref.root.after(0, gui_ref.update_progress, 0, "❌ Push thất bại")
+                gui_ref.root.after(0, gui_ref.add_history, video_id, "❌ Push thất bại")
+            
             download_history.append({
                 'video_id': video_id,
-                'status': 'failed',
+                'status': 'push_failed',
                 'time': time.strftime('%H:%M:%S')
             })
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.add_history, video_id, "❌ Upload thất bại")
-            print(f"[COMPLETE] Failed: {video_id}")
+        
+        # Dọn dẹp file tạm (nếu còn)
+        try:
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+        except:
+            pass
                 
     except Exception as e:
         print(f"Error: {e}")
