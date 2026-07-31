@@ -1,862 +1,654 @@
-#!/usr/bin/env python3
-"""Server tải audio + tự upload lên GitHub + Cloudflare Tunnel + Giao diện tiến trình
-MOBILE CHỈ KÍCH HOẠT - SERVER TỰ LÀM TẤT CẢ
-ĐÃ SỬA: Kill process cũ, hủy hoàn toàn khi tải video mới
-"""
-
-import os, sys, tempfile, time, subprocess, json, base64, threading, re
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+﻿# -*- coding: utf-8 -*-
+import os
+import re
+import sys
+import threading
+import json
+import urllib.request
+import urllib.error
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext, filedialog
+from pypinyin import pinyin, Style
+import yt_dlp
+from deep_translator import GoogleTranslator
+import whisper
 
-# ===== TỰ ĐỘNG CÀI PSUTIL =====
-try:
-    import psutil
-except ImportError:
-    print("⚠️ psutil not found, installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "psutil"])
-    import psutil
+# ===== CẤU HÌNH =====
+COOKIE_FILE = "cookies.txt"
 
-PORT = 8888
-CONFIG_FILE = "server_config.json"
+def get_ffmpeg_path():
+    """Tự động tìm đường dẫn thư mục bin của FFmpeg"""
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+        bundled_ffmpeg = os.path.join(base_path, 'ffmpeg', 'bin')
+        if os.path.exists(bundled_ffmpeg):
+            return bundled_ffmpeg
+    default_path = r'C:\ffmpeg\bin'
+    return default_path
 
-download_progress = {}
-active_downloads = {}  # Lưu cancel_event
-active_processes = {}  # Lưu process để kill
-download_history = []
-server_config = {'token': ''}
-gui_ref = None
+def extract_video_id(url):
+    """Trích xuất Video ID từ đường dẫn YouTube"""
+    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
+    return match.group(1) if match else "unknown_video"
 
-def load_server_config():
-    global server_config
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                server_config.update(json.load(f))
-        except:
-            pass
-
-# ===== KILL PROCESS =====
-def kill_process_by_video_id(video_id):
-    """Kill tất cả process liên quan đến video_id"""
-    killed = []
-    try:
-        # Kill process yt-dlp
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-            try:
-                cmdline = ' '.join(proc.info['cmdline'] or [])
-                if video_id in cmdline or 'yt-dlp' in cmdline:
-                    proc.kill()
-                    killed.append(proc.pid)
-                    print(f"[KILL] Killed process {proc.pid} for {video_id}")
-            except:
-                pass
-    except Exception as e:
-        print(f"[KILL] Error: {e}")
-    
-    # Xóa khỏi active_processes
-    if video_id in active_processes:
-        try:
-            if active_processes[video_id].poll() is None:
-                active_processes[video_id].kill()
-            del active_processes[video_id]
-        except:
-            pass
-    
-    # Xóa file tạm
-    tmp_file = os.path.join(tempfile.gettempdir(), f'audio_{video_id}.m4a')
-    if os.path.exists(tmp_file):
-        try:
-            os.remove(tmp_file)
-            print(f"[CLEAN] Removed {tmp_file}")
-        except:
-            pass
-    
-    # Xóa file trong downloads
-    for ext in ['m4a', 'webm', 'mp3', 'part']:
-        filepath = os.path.join('downloads', f"{video_id}.{ext}")
-        if os.path.exists(filepath):
-            try:
-                os.remove(filepath)
-                print(f"[CLEAN] Removed {filepath}")
-            except:
-                pass
-    
-    return killed
-
-def upload_to_github(file_path, video_id):
-    """Upload file lên GitHub với log chi tiết"""
-    try:
-        import requests
-        
-        print(f"\n{'='*50}")
-        print(f"[UPLOAD] === BẮT ĐẦU UPLOAD: {video_id} ===")
-        print(f"[UPLOAD] Thời gian: {time.strftime('%H:%M:%S')}")
-        print(f"[UPLOAD] File path: {file_path}")
-        
-        # 1. KIỂM TRA FILE
-        if not os.path.exists(file_path):
-            print(f"[UPLOAD] ❌ File không tồn tại: {file_path}")
-            return False
-        
-        file_size = os.path.getsize(file_path)
-        print(f"[UPLOAD] ✅ File size: {file_size} bytes ({file_size/1024:.1f}KB / {file_size/1024/1024:.2f}MB)")
-        
-        # 2. LẤY TOKEN
-        token = server_config.get('token', '')
-        print(f"[UPLOAD] Token: {token[:10]}...{token[-4:] if len(token) > 14 else 'EMPTY'}")
-        
-        if not token:
-            print(f"[UPLOAD] ❌ Không có token!")
-            download_progress[video_id] = {'status': 'error', 'message': 'Chưa cấu hình token'}
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.update_progress, 0, "❌ Chưa cấu hình token!")
-            return False
-        
-        # 3. ĐỌC VÀ ENCODE FILE
-        print(f"[UPLOAD] 📖 Đang đọc file...")
-        with open(file_path, 'rb') as f:
-            content = base64.b64encode(f.read()).decode('utf-8')
-        print(f"[UPLOAD] ✅ Đã encode file, length: {len(content)} characters")
-        
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 10, "📤 Upload: Đang chuẩn bị...")
-        
-        # 4. TẠO HEADERS
-        api = f"https://api.github.com/repos/PinyinCode/subtitle-ai/contents/data/audio/{video_id}.m4a"
-        print(f"[UPLOAD] 🔗 API URL: {api}")
-        
-        headers = {
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        print(f"[UPLOAD] ✅ Headers created")
-        
-        # 5. KIỂM TRA TOKEN
-        print(f"[UPLOAD] 🔍 Kiểm tra token...")
-        try:
-            test_resp = requests.get("https://api.github.com/user", headers=headers, timeout=10)
-            print(f"[UPLOAD] Test response status: {test_resp.status_code}")
-            if test_resp.status_code == 200:
-                user = test_resp.json().get('login')
-                print(f"[UPLOAD] ✅ Token hợp lệ! User: {user}")
-            else:
-                print(f"[UPLOAD] ❌ Token không hợp lệ! Status: {test_resp.status_code}")
-                print(f"[UPLOAD] Response: {test_resp.text[:200]}")
-                return False
-        except Exception as e:
-            print(f"[UPLOAD] ❌ Lỗi kiểm tra token: {e}")
-            return False
-        
-        # 6. KIỂM TRA REPOSITORY
-        print(f"[UPLOAD] 🔍 Kiểm tra repository...")
-        try:
-            repo_resp = requests.get("https://api.github.com/repos/PinyinCode/subtitle-ai", headers=headers, timeout=10)
-            print(f"[UPLOAD] Repository response: {repo_resp.status_code}")
-            if repo_resp.status_code == 200:
-                repo_info = repo_resp.json()
-                print(f"[UPLOAD] ✅ Repository: {repo_info.get('full_name')}")
-                print(f"[UPLOAD]    Default branch: {repo_info.get('default_branch')}")
-                print(f"[UPLOAD]    Private: {repo_info.get('private')}")
-            else:
-                print(f"[UPLOAD] ❌ Repository không tồn tại! Status: {repo_resp.status_code}")
-                print(f"[UPLOAD] Response: {repo_resp.text[:200]}")
-                return False
-        except Exception as e:
-            print(f"[UPLOAD] ❌ Lỗi kiểm tra repository: {e}")
-            return False
-        
-        # 7. KIỂM TRA THƯ MỤC data/audio
-        print(f"[UPLOAD] 🔍 Kiểm tra thư mục data/audio...")
-        folder_api = "https://api.github.com/repos/PinyinCode/subtitle-ai/contents/data/audio"
-        try:
-            folder_resp = requests.get(folder_api, headers=headers, timeout=10)
-            print(f"[UPLOAD] Folder response: {folder_resp.status_code}")
-            if folder_resp.status_code == 200:
-                files = folder_resp.json()
-                print(f"[UPLOAD] ✅ Thư mục data/audio tồn tại! Số file: {len(files)}")
-            elif folder_resp.status_code == 404:
-                print(f"[UPLOAD] ⚠️ Thư mục data/audio chưa tồn tại!")
-                print(f"[UPLOAD] 📁 Đang tạo thư mục...")
-                
-                # Tạo thư mục
-                create_body = {
-                    "message": "Create data/audio folder",
-                    "content": base64.b64encode(b"# Audio folder").decode('utf-8'),
-                    "branch": "main"
-                }
-                create_resp = requests.put(
-                    "https://api.github.com/repos/PinyinCode/subtitle-ai/contents/data/audio/.gitkeep",
-                    headers=headers,
-                    json=create_body,
-                    timeout=30
-                )
-                print(f"[UPLOAD] Create folder response: {create_resp.status_code}")
-                if create_resp.status_code in [200, 201]:
-                    print(f"[UPLOAD] ✅ Đã tạo thư mục data/audio!")
-                else:
-                    print(f"[UPLOAD] ❌ Không thể tạo thư mục: {create_resp.status_code}")
-                    print(f"[UPLOAD] Response: {create_resp.text[:200]}")
-                    return False
-            else:
-                print(f"[UPLOAD] ❌ Lỗi kiểm tra thư mục: {folder_resp.status_code}")
-                print(f"[UPLOAD] Response: {folder_resp.text[:200]}")
-                return False
-        except Exception as e:
-            print(f"[UPLOAD] ❌ Lỗi kiểm tra thư mục: {e}")
-            return False
-        
-        # 8. KIỂM TRA FILE ĐÃ TỒN TẠI
-        print(f"[UPLOAD] 🔍 Kiểm tra file {video_id}.m4a...")
-        try:
-            r = requests.get(api, headers=headers, timeout=10)
-            print(f"[UPLOAD] File check response: {r.status_code}")
-            sha = r.json().get('sha') if r.status_code == 200 else None
-            if sha:
-                print(f"[UPLOAD] ℹ️ File đã tồn tại, sẽ ghi đè (sha: {sha[:8]}...)")
-            else:
-                print(f"[UPLOAD] ℹ️ File chưa tồn tại, sẽ tạo mới")
-        except Exception as e:
-            print(f"[UPLOAD] ❌ Lỗi kiểm tra file: {e}")
-            sha = None
-        
-        # 9. UPLOAD
-        body = {
-            "message": f"Upload audio {video_id}",
-            "content": content,
-            "branch": "main"
-        }
-        if sha:
-            body["sha"] = sha
-        
-        print(f"[UPLOAD] 📤 Đang upload lên GitHub...")
-        print(f"[UPLOAD] Body size: {len(str(body))} characters")
-        
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 80, f"📤 Upload: Đang gửi... ({file_size/1024:.1f}KB)")
-        
-        # Bắt đầu đo thời gian
-        start_time = time.time()
-        
-        try:
-            r = requests.put(api, headers=headers, json=body, timeout=120)
-            elapsed = time.time() - start_time
-            print(f"[UPLOAD] ⏱️ Upload time: {elapsed:.2f}s")
-            print(f"[UPLOAD] 📥 Response status: {r.status_code}")
-            print(f"[UPLOAD] 📥 Response headers: {dict(r.headers)}")
-            print(f"[UPLOAD] 📥 Response body: {r.text[:300]}")
-            
-        except requests.Timeout:
-            elapsed = time.time() - start_time
-            print(f"[UPLOAD] ❌ TIMEOUT sau {elapsed:.2f}s!")
-            error_msg = "❌ Upload timeout! Quá 120 giây"
-            download_progress[video_id] = {'status': 'error', 'message': error_msg}
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.update_progress, 0, error_msg)
-            return False
-        except Exception as e:
-            print(f"[UPLOAD] ❌ Lỗi upload: {e}")
-            raise
-        
-        # 10. XỬ LÝ KẾT QUẢ
-        if r.status_code in [200, 201]:
-            print(f"[UPLOAD] ✅ Upload thành công!")
-            
-            # Kích hoạt Actions
-            try:
-                print(f"[UPLOAD] 🔄 Kích hoạt GitHub Actions...")
-                actions_resp = requests.post(
-                    f"https://api.github.com/repos/PinyinCode/subtitle-ai/dispatches",
-                    headers=headers,
-                    json={"event_type": "process_audio", "client_payload": {"video_id": video_id}},
-                    timeout=30
-                )
-                print(f"[UPLOAD] Actions response: {actions_resp.status_code}")
-                if actions_resp.status_code == 204:
-                    print(f"[UPLOAD] ✅ Actions triggered!")
-                else:
-                    print(f"[UPLOAD] ⚠️ Actions trigger: {actions_resp.status_code}")
-            except Exception as e:
-                print(f"[UPLOAD] ⚠️ Actions trigger error: {e}")
-            
-            download_progress[video_id] = {'status': 'done', 'upload_percent': 100}
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.update_progress, 100, "✅ Hoàn tất! Đợi AI xử lý...")
-            
-            print(f"[UPLOAD] === HOÀN TẤT: {video_id} ===")
-            print(f"{'='*50}\n")
-            return True
-        else:
-            error_msg = f'Lỗi {r.status_code}: {r.text[:200]}'
-            download_progress[video_id] = {'status': 'error', 'message': error_msg}
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.update_progress, 0, f"❌ {error_msg}")
-            print(f"[UPLOAD] ❌ {error_msg}")
-            print(f"[UPLOAD] === THẤT BẠI: {video_id} ===")
-            print(f"{'='*50}\n")
-            return False
-            
-    except Exception as e:
-        error_msg = f'❌ Lỗi: {str(e)}'
-        download_progress[video_id] = {'status': 'error', 'message': error_msg}
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 0, error_msg)
-        print(f"[UPLOAD] ❌ {error_msg}")
-        print(f"[UPLOAD] === THẤT BẠI: {video_id} ===")
-        print(f"{'='*50}\n")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def progress_hook_factory(video_id):
-    def progress_hook(d):
-        if d['status'] == 'downloading':
-            total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-            downloaded = d.get('downloaded_bytes', 0)
-            percent = round(downloaded/total*100, 1) if total > 0 else 0
-            speed = d.get('_speed_str', 'N/A').strip()
-            
-            download_progress[video_id] = {
-                'status': 'downloading',
-                'downloaded': downloaded,
-                'total': total,
-                'speed': speed,
-                'percent': percent
-            }
-            
-            if gui_ref:
-                d_mb = downloaded/1024/1024
-                t_mb = total/1024/1024 if total > 0 else 0
-                gui_ref.root.after(0, gui_ref.update_progress, 
-                    percent, f"⬇️ Tải: {d_mb:.1f}/{t_mb:.1f}MB - {speed}")
-    return progress_hook
-
-# ===== HÀM XỬ LÝ NGẦM =====
-def process_download_background(url, video_id):
-    """Xử lý tải và upload trong background, hỗ trợ kill process"""
-    tmp_file = None
-    cancel_event = threading.Event()
-    active_downloads[video_id] = cancel_event
-    process = None
-    
-    try:
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 0, f"⬇️ Đang tải: {video_id}...")
-        
-        tmp_file = os.path.join(tempfile.gettempdir(), f'audio_{video_id}.m4a')
-        
-        import yt_dlp
-        
-        ydl_opts = {
-            'format': 'worstaudio[ext=m4a]/worstaudio',
-            'outtmpl': tmp_file,
-            'quiet': True,
-            'no_warnings': True,
-            'extractor_args': {'youtube': {'js_runtimes': ['deno']}},
-            'progress_hooks': [progress_hook_factory(video_id)],
-            'noplaylist': True
-        }
-        
-        download_result = {'success': False, 'error': None}
-        
-        def do_download():
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-                download_result['success'] = True
-            except Exception as e:
-                download_result['error'] = str(e)
-        
-        dl_thread = threading.Thread(target=do_download, daemon=True)
-        dl_thread.start()
-        
-        # Lưu thread để có thể kill
-        active_processes[video_id] = dl_thread
-        
-        while dl_thread.is_alive():
-            if cancel_event.is_set():
-                # Kill process con
-                kill_process_by_video_id(video_id)
-                download_result['error'] = "Cancelled"
-                break
-            dl_thread.join(0.5)
-        
-        if cancel_event.is_set():
-            if os.path.exists(tmp_file):
-                os.remove(tmp_file)
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.update_progress, 0, "🚫 Đã hủy")
-                gui_ref.root.after(0, gui_ref.add_history, video_id, "🚫 Đã hủy")
-            return
-        
-        if not download_result['success']:
-            raise Exception(download_result.get('error', 'Download failed'))
-        
-        if not os.path.exists(tmp_file) or os.path.getsize(tmp_file) == 0:
-            raise Exception("File not created")
-        
-        print(f"Downloaded: {os.path.getsize(tmp_file)/1024:.0f}KB")
-        
-        # Upload
-        upload_success = upload_to_github(tmp_file, video_id)
-        
-        # Dọn dẹp
-        try:
-            if os.path.exists(tmp_file):
-                os.remove(tmp_file)
-        except:
-            pass
-        
-        if upload_success:
-            download_history.append({
-                'video_id': video_id,
-                'status': 'success',
-                'time': time.strftime('%H:%M:%S')
-            })
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.add_history, video_id, "✅ Thành công")
-            print(f"[UPLOAD] Success: {video_id}")
-        else:
-            download_history.append({
-                'video_id': video_id,
-                'status': 'failed',
-                'time': time.strftime('%H:%M:%S')
-            })
-            if gui_ref:
-                gui_ref.root.after(0, gui_ref.add_history, video_id, "❌ Upload thất bại")
-                
-    except Exception as e:
-        print(f"Background error: {e}")
-        if gui_ref:
-            gui_ref.root.after(0, gui_ref.update_progress, 0, f"❌ Lỗi: {e}")
-            gui_ref.root.after(0, gui_ref.add_history, video_id, f"❌ Lỗi: {str(e)[:30]}")
-    finally:
-        if video_id in active_downloads:
-            del active_downloads[video_id]
-        if video_id in active_processes:
-            del active_processes[video_id]
-        if tmp_file and os.path.exists(tmp_file):
-            try: os.remove(tmp_file)
-            except: pass
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        p = urlparse(self.path)
-        q = parse_qs(p.query)
-        url = q.get('url', [None])[0]
-        vid = q.get('id', [None])[0]
-        
-        # Health check
-        if p.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            try:
-                self.wfile.write(b'OK')
-            except:
-                pass
-            return
-        
-        # Tiến độ
-        if p.path == '/progress':
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            try:
-                if vid and vid in download_progress:
-                    self.wfile.write(json.dumps(download_progress[vid]).encode())
-                else:
-                    self.wfile.write(json.dumps({'status': 'done', 'percent': 100}).encode())
-            except:
-                pass
-            return
-        
-        # === HỦY TẢI - KILL PROCESS ===
-        if p.path == '/cancel':
-            if vid:
-                # Kill process
-                kill_process_by_video_id(vid)
-                
-                if vid in active_downloads:
-                    active_downloads[vid].set()
-                    del active_downloads[vid]
-                if vid in download_progress:
-                    download_progress[vid] = {'status': 'cancelled'}
-                if gui_ref:
-                    gui_ref.root.after(0, gui_ref.update_progress, 0, "🚫 Đã hủy")
-                    gui_ref.root.after(0, gui_ref.add_history, vid, "🚫 Đã hủy")
-            
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            try:
-                self.wfile.write(json.dumps({'status': 'cancelled'}).encode())
-            except:
-                pass
-            return
-        
-        # === TẢI AUDIO - KIỂM TRA VÀ HỦY VIDEO CŨ ===
-        if p.path == '/download' and url:
-            video_id = None
-            try:
-                match = re.search(r'(?:v=|\/)([\w-]{11})', url)
-                video_id = match.group(1) if match else f"vid_{int(time.time())}"
-                
-                if not server_config.get('token', ''):
-                    self.send_response(400)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    try:
-                        self.wfile.write(json.dumps({
-                            'status': 'error',
-                            'message': 'Chưa cấu hình token!'
-                        }).encode())
-                    except:
-                        pass
-                    return
-                
-                # ✅ KIỂM TRA NẾU VIDEO CŨ ĐANG CHẠY
-                if video_id in active_downloads or video_id in active_processes:
-                    print(f"[SERVER] Video cũ đang chạy: {video_id}, hủy...")
-                    kill_process_by_video_id(video_id)
-                    
-                    if video_id in active_downloads:
-                        active_downloads[video_id].set()
-                        del active_downloads[video_id]
-                    
-                    if gui_ref:
-                        gui_ref.root.after(0, gui_ref.update_progress, 0, f"🔄 Đã hủy video cũ: {video_id}")
-                        gui_ref.root.after(0, gui_ref.add_history, video_id, "🔄 Đã hủy (tải mới)")
-                    
-                    # Đợi một chút để process kết thúc
-                    time.sleep(0.5)
-                
-                # ✅ TRẢ RESPONSE NGAY
-                self.send_response(202)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                try:
-                    self.wfile.write(json.dumps({
-                        'status': 'accepted',
-                        'video_id': video_id,
-                        'message': 'Download đã bắt đầu'
-                    }).encode())
-                except:
-                    pass
-                
-                # ✅ CHẠY XỬ LÝ NGẦM
-                threading.Thread(
-                    target=process_download_background, 
-                    args=(url, video_id), 
-                    daemon=True
-                ).start()
-                
-                if gui_ref:
-                    gui_ref.root.after(0, gui_ref.add_history, video_id, "🔄 Đã bắt đầu")
-                
-            except Exception as e:
-                try:
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({'status': 'error', 'message': str(e)}).encode())
-                except:
-                    pass
-            return
-        
-        self.send_response(404)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        try:
-            self.wfile.write(b'Not Found')
-        except:
-            pass
-    
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', '*')
-        self.end_headers()
-
-
-class ServerGUI:
+class SubtitleApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Subtitle AI Server")
-        self.root.geometry("550x480")
-        self.root.configure(bg='#0d1117')
-        self.root.resizable(False, False)
+        self.root.title("Phần Mềm Tạo Phụ Đề AI - iOS Style")
+        self.root.geometry("620x820")
+        self.root.minsize(560, 750)
         
-        self.config = self.load_config()
-        self.cloudflare_process = None
+        self.config_file = 'config.json'
+
+        # --- CẤU HÌNH STYLE: IOS DARK MODE ---
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
         
-        self.bg = '#0d1117'
-        self.card = '#161b22'
-        self.text = '#c9d1d9'
-        self.sub = '#8b949e'
-        self.green = '#3fb950'
-        self.red = '#f85149'
-        self.purple = '#6e40c9'
-        self.yellow = '#d2991d'
-        self.blue = '#58a6ff'
+        BG_COLOR = "#000000"
+        CARD_BG = "#121214"
+        CARD_ELEMENT = "#1C1C1E"
+        TEXT_PRIMARY = "#FFFFFF"
+        TEXT_SECONDARY = "#8E8E93"
         
-        tk.Label(root, text="🎬 SUBTITLE AI SERVER", font=('Arial', 14, 'bold'),
-                fg=self.purple, bg=self.bg).pack(pady=(15, 8))
+        self.root.configure(bg=BG_COLOR)
         
-        # Token
-        tk.Label(root, text="GitHub Token:", fg=self.sub, bg=self.bg,
-                font=('Arial', 10)).pack(anchor='w', padx=30)
+        # Style cơ bản
+        self.style.configure('TFrame', background=BG_COLOR)
+        self.style.configure('Card.TFrame', background=CARD_BG, relief='flat', borderwidth=0)
+        self.style.configure('TLabel', background=BG_COLOR, foreground=TEXT_PRIMARY, font=('Segoe UI', 9))
+        self.style.configure('Card.TLabel', background=CARD_BG, foreground=TEXT_PRIMARY, font=('Segoe UI', 9))
+        self.style.configure('Title.TLabel', background=BG_COLOR, font=('Segoe UI', 16, 'bold'), foreground=TEXT_PRIMARY, anchor='center')
+        self.style.configure('SectionTitle.TLabel', background=CARD_BG, font=('Segoe UI', 9, 'bold'), foreground=TEXT_SECONDARY)
+        self.style.configure('Status.TLabel', background=CARD_BG, font=('Segoe UI', 9), foreground=TEXT_SECONDARY)
+        self.style.configure('TCheckbutton', background=CARD_BG, foreground=TEXT_PRIMARY, font=('Segoe UI', 9))
+        self.style.map('TCheckbutton', background=[('active', CARD_BG)], indicatorcolor=[('selected', '#0A84FF')])
         
-        tf = tk.Frame(root, bg=self.bg)
-        tf.pack(fill='x', padx=30, pady=(5, 10))
+        self.style.configure('TButton', font=('Segoe UI', 9, 'bold'), borderwidth=0, relief='flat')
+        self.style.configure('Primary.TButton', background='#FFFFFF', foreground='#000000', padding=(12, 6))
+        self.style.map('Primary.TButton',
+            background=[('active', '#D1D1D6'), ('disabled', '#2C2C2E')],
+            foreground=[('active', '#000000'), ('disabled', TEXT_SECONDARY)]
+        )
         
-        self.token_var = tk.StringVar(value=self.config.get('token', ''))
-        self.token_entry = tk.Entry(tf, textvariable=self.token_var,
-                                    font=('Arial', 10), show='*',
-                                    bg='#0d1117', fg=self.text, relief='flat',
-                                    insertbackground=self.text)
-        self.token_entry.pack(side='left', fill='x', expand=True, ipady=8, ipadx=8)
+        self.style.configure('Danger.TButton', background='#2C2C2E', foreground='#FF453A', padding=(12, 6))
+        self.style.map('Danger.TButton',
+            background=[('active', '#48484A'), ('disabled', '#1C1C1E')],
+            foreground=[('active', '#FF6961'), ('disabled', TEXT_SECONDARY)]
+        )
         
-        self.show_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(tf, text="👁", variable=self.show_var,
-                      bg=self.bg, fg=self.sub, selectcolor=self.bg,
-                      command=self.toggle_token).pack(side='right', padx=(5, 0))
+        self.style.configure('Square.TButton', background='#2C2C2E', foreground='#FFFFFF', padding=(8, 4))
+        self.style.map('Square.TButton',
+            background=[('active', '#3A3A3C'), ('disabled', '#1C1C1E')],
+            foreground=[('active', '#FFFFFF'), ('disabled', TEXT_SECONDARY)]
+        )
         
-        # Nút lưu + test
-        btn_frame = tk.Frame(root, bg=self.bg)
-        btn_frame.pack(fill='x', padx=30, pady=(5, 5))
+        self.style.configure('TEntry', fieldbackground=CARD_ELEMENT, foreground=TEXT_PRIMARY, insertcolor=TEXT_PRIMARY, borderwidth=0, relief='flat')
+        self.style.configure('TProgressbar', background='#0A84FF', troughcolor=CARD_ELEMENT, borderwidth=0, thickness=6)
+
+        self.cancel_event = threading.Event()
+        self.current_output_file = None
+        self.is_processing = False
+
+        # --- FOOTER ---
+        footer_frame = tk.Frame(root, bg=BG_COLOR, height=32)
+        footer_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=24, pady=(0, 10))
+        dev_label = tk.Label(footer_frame, text="Nhà phát triển: +84528484668  |  hoanginvest199@gmail.com", 
+                            font=("Segoe UI", 8, "bold"), fg=TEXT_SECONDARY, bg=BG_COLOR)
+        dev_label.pack(expand=True)
+
+        # --- MAIN CONTAINER ---
+        main_container = ttk.Frame(root, style='TFrame')
+        main_container.pack(fill=tk.BOTH, expand=True, padx=24, pady=(20, 5))
+
+        title_label = ttk.Label(main_container, text="AI Pinyin Subtitle", style='Title.TLabel', anchor='center')
+        title_label.pack(fill=tk.X, pady=(0, 16))
+
+        # ===== CARD 1: CẤU HÌNH TOKEN =====
+        config_card = ttk.Frame(main_container, style='Card.TFrame', padding=16)
+        config_card.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Button(btn_frame, text="💾 LƯU TOKEN", bg=self.green, fg='#0d1117',
-                 font=('Arial', 9, 'bold'), relief='flat', pady=8,
-                 command=self.save_token).pack(side='left', fill='x', expand=True, padx=(0, 5))
+        ttk.Label(config_card, text="⚙️ CẤU HÌNH GITHUB", style='SectionTitle.TLabel').pack(anchor=tk.W, pady=(0, 4))
         
-        tk.Button(btn_frame, text="🔍 TEST", bg=self.blue, fg='white',
-                 font=('Arial', 9, 'bold'), relief='flat', pady=8,
-                 command=self.test_connection).pack(side='left', fill='x', expand=True, padx=(5, 0))
+        token_row = ttk.Frame(config_card, style='Card.TFrame')
+        token_row.pack(fill=tk.X, pady=(4, 0))
         
-        # Progress
-        prog_frame = tk.Frame(root, bg=self.card)
-        prog_frame.pack(fill='x', padx=30, pady=(10, 5))
+        ttk.Label(token_row, text="Token:", style='Card.TLabel').pack(side=tk.LEFT, padx=(0, 8))
         
-        tk.Label(prog_frame, text="📊 TIẾN TRÌNH", font=('Arial', 9, 'bold'),
-                fg=self.sub, bg=self.card).pack(anchor='w', padx=10, pady=(10, 5))
+        self.token_var = tk.StringVar()
+        self.token_entry = ttk.Entry(token_row, textvariable=self.token_var, font=('Segoe UI', 9), show='*')
+        self.token_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
         
-        self.progress_bar = ttk.Progressbar(prog_frame, mode='determinate')
-        self.progress_bar.pack(fill='x', padx=10, pady=(0, 5))
+        self.btn_reset_token = ttk.Button(token_row, text="🔄 Reset", style='Square.TButton', command=self.reset_token)
+        self.btn_reset_token.pack(side=tk.RIGHT, padx=(6, 0))
         
-        self.progress_label = tk.Label(prog_frame, text="Sẵn sàng",
-                                       fg=self.sub, bg=self.card, font=('Arial', 9))
-        self.progress_label.pack(anchor='w', padx=10, pady=(0, 10))
+        self.btn_save_token = ttk.Button(token_row, text="💾 Lưu", style='Square.TButton', command=self.save_token)
+        self.btn_save_token.pack(side=tk.RIGHT)
         
-        # Lịch sử
-        history_frame = tk.Frame(root, bg=self.card)
-        history_frame.pack(fill='x', padx=30, pady=(5, 5))
+        self.token_status = ttk.Label(config_card, text="🔴 Token: Chưa có", style='Status.TLabel')
+        self.token_status.pack(anchor=tk.W, pady=(6, 0))
         
-        tk.Label(history_frame, text="📜 LỊCH SỬ", font=('Arial', 9, 'bold'),
-                fg=self.sub, bg=self.card).pack(anchor='w', padx=10, pady=(10, 5))
+        self.load_token_from_config()
+
+        # ===== CARD 2: NHẬP LINK =====
+        link_card = ttk.Frame(main_container, style='Card.TFrame', padding=16)
+        link_card.pack(fill=tk.X, pady=(0, 10))
         
-        self.history_label = tk.Label(history_frame, text="Chưa có hoạt động",
-                                      fg=self.sub, bg=self.card, font=('Arial', 8))
-        self.history_label.pack(anchor='w', padx=10, pady=(0, 10))
+        ttk.Label(link_card, text="🔗 ĐƯỜNG DẪN YOUTUBE", style='SectionTitle.TLabel').pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(link_card, text="Tự động nhận diện và dịch sang Trung - Pinyin - Việt", style='Status.TLabel').pack(anchor=tk.W, pady=(0, 8))
         
-        # Cloudflare
-        cf_frame = tk.Frame(root, bg=self.card)
-        cf_frame.pack(fill='x', padx=30, pady=(5, 5))
+        url_row = ttk.Frame(link_card, style='Card.TFrame')
+        url_row.pack(fill=tk.X, pady=(0, 10))
+
+        self.url_entry = ttk.Entry(url_row, font=('Segoe UI', 10))
+        self.url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, ipadx=6)
+
+        self.btn_clear_url = ttk.Button(url_row, text="✕", style='Square.TButton', command=self.clear_url_entry)
+        self.btn_clear_url.pack(side=tk.RIGHT, padx=(6, 0))
+
+        # ===== CARD 3: THƯ MỤC LƯU =====
+        save_card = ttk.Frame(main_container, style='Card.TFrame', padding=16)
+        save_card.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(cf_frame, text="🌐 CLOUDFLARE TUNNEL", font=('Arial', 10, 'bold'),
-                fg=self.text, bg=self.card).pack(pady=(10, 5))
+        ttk.Label(save_card, text="💾 THƯ MỤC LƯU FILE", style='SectionTitle.TLabel').pack(anchor=tk.W, pady=(0, 8))
         
-        url_frame = tk.Frame(cf_frame, bg=self.card)
-        url_frame.pack(fill='x', pady=(5, 5))
+        self.save_dir_var = tk.StringVar(value=os.getcwd())
         
-        self.url_var = tk.StringVar(value="Chưa kết nối")
-        url_entry = tk.Entry(url_frame, textvariable=self.url_var,
-                            font=('Arial', 9), state='readonly',
-                            bg='#0d1117', fg=self.green, relief='flat',
-                            readonlybackground='#0d1117')
-        url_entry.pack(side='left', fill='x', expand=True, ipady=6, ipadx=6)
+        save_row = ttk.Frame(save_card, style='Card.TFrame')
+        save_row.pack(fill=tk.X)
         
-        self.copy_btn = tk.Button(url_frame, text="📋 COPY",
-                                  bg=self.blue, fg='white',
-                                  font=('Arial', 9, 'bold'), relief='flat', pady=6, padx=12,
-                                  command=self.copy_url, state='disabled')
-        self.copy_btn.pack(side='right', padx=(5, 0))
+        self.save_entry = ttk.Entry(save_row, textvariable=self.save_dir_var, font=('Segoe UI', 9), state="readonly")
+        self.save_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, ipadx=6)
         
-        self.cf_btn = tk.Button(cf_frame, text="▶️ KẾT NỐI CLOUDFLARE",
-                               bg=self.purple, fg='white',
-                               font=('Arial', 10, 'bold'), relief='flat', pady=10,
-                               command=self.toggle_tunnel)
-        self.cf_btn.pack(fill='x', pady=(5, 10))
+        self.btn_browse = ttk.Button(save_row, text="Duyệt...", style='Square.TButton', command=self.browse_save_dir)
+        self.btn_browse.pack(side=tk.RIGHT, padx=(6, 0))
+
+        # Checkbox GitHub
+        self.upload_gh_var = tk.BooleanVar(value=False)
+        self.chk_github = ttk.Checkbutton(save_card, text="☁️ Đồng bộ lên GitHub Gist", variable=self.upload_gh_var, style='TCheckbutton')
+        self.chk_github.pack(anchor=tk.W, pady=(12, 0))
+
+        # ===== CARD 4: NÚT TẠO PHỤ ĐỀ =====
+        action_card = ttk.Frame(main_container, style='Card.TFrame', padding=16)
+        action_card.pack(fill=tk.X, pady=(0, 10))
         
-        # Status
-        self.status_label = tk.Label(root, text="🟢 Server đang chạy | http://localhost:8888",
-                                     fg=self.green, bg=self.bg, font=('Arial', 9))
-        self.status_label.pack(pady=(2, 0))
-    
-    def add_history(self, video_id, status):
-        timestamp = time.strftime("%H:%M:%S")
-        text = f"[{timestamp}] {video_id[:15]}... {status}"
-        self.history_label.config(text=text)
-        if not hasattr(self, 'history_list'):
-            self.history_list = []
-        self.history_list.append(text)
-        if len(self.history_list) > 10:
-            self.history_list.pop(0)
-    
-    def update_progress(self, value, text):
-        self.progress_bar['value'] = value
-        self.progress_label.config(text=text)
-        self.root.update_idletasks()
-    
-    def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r') as f:
-                    return json.load(f)
-            except:
-                pass
-        return {'token': ''}
-    
+        self.btn_action = ttk.Button(action_card, text="🎬 TẠO PHỤ ĐỀ AI", style='Primary.TButton', command=self.handle_action_button)
+        self.btn_action.pack(fill=tk.X, ipady=10)
+
+        # ===== CARD 5: TIẾN TRÌNH =====
+        progress_card = ttk.Frame(main_container, style='Card.TFrame', padding=16)
+        progress_card.pack(fill=tk.X, pady=(0, 10))
+
+        self.progress_label = ttk.Label(progress_card, text="📊 Trạng thái: Sẵn sàng", style='Status.TLabel')
+        self.progress_label.pack(anchor=tk.W, pady=(0, 8))
+
+        self.progress_bar = ttk.Progressbar(progress_card, orient="horizontal", mode="determinate")
+        self.progress_bar.pack(fill=tk.X)
+
+        # ===== CARD 6: NHẬT KÝ =====
+        log_card = ttk.Frame(main_container, style='Card.TFrame', padding=16)
+        log_card.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        
+        ttk.Label(log_card, text="📋 NHẬT KÝ", style='SectionTitle.TLabel').pack(anchor=tk.W, pady=(0, 8))
+        
+        log_inner = tk.Frame(log_card, bg=CARD_ELEMENT, bd=0)
+        log_inner.pack(fill=tk.BOTH, expand=True)
+        
+        self.log_area = scrolledtext.ScrolledText(
+            log_inner, font=("Consolas", 8), bg=CARD_ELEMENT, fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY,
+            relief='flat', borderwidth=8, highlightthickness=0, wrap=tk.WORD
+        )
+        self.log_area.pack(fill=tk.BOTH, expand=True)
+
+        # Hướng dẫn cookie
+        self.log("="*50)
+        self.log("🔑 HƯỚNG DẪN LẤY COOKIE YOUTUBE:")
+        self.log("1. Cài extension 'Get cookies.txt LOCALLY' trên Chrome")
+        self.log("2. Đăng nhập YouTube, export cookies.txt")
+        self.log("3. Đặt file cookies.txt cùng thư mục với phần mềm")
+        self.log("="*50)
+
+    # ===== QUẢN LÝ TOKEN =====
+    def load_token_from_config(self):
+        config = self.load_config()
+        token = config.get('gh_pat_token', '')
+        if token:
+            self.token_var.set(token)
+            self.token_status.config(text="🟢 Token: Đã cấu hình", foreground="#30D158")
+        else:
+            self.token_status.config(text="🔴 Token: Chưa có", foreground="#FF453A")
+
     def save_token(self):
         token = self.token_var.get().strip()
         if not token:
-            messagebox.showerror("Lỗi", "Vui lòng nhập token!")
-            return
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump({'token': token}, f)
-        self.config['token'] = token
-        load_server_config()
-        messagebox.showinfo("OK", "Đã lưu Token!")
-        self.status_label.config(text="✅ Token đã lưu", fg=self.green)
-        self.root.after(2000, lambda: self.status_label.config(
-            text="🟢 Server đang chạy | http://localhost:8888", fg=self.green))
-    
-    def test_connection(self):
-        token = self.token_var.get().strip()
-        if not token:
-            messagebox.showerror("Lỗi", "Vui lòng nhập GitHub token!")
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập Token GitHub!")
             return
         
+        config = self.load_config()
+        config['gh_pat_token'] = token
+        self.save_config(config)
+        self.token_status.config(text="🟢 Token: Đã lưu", foreground="#30D158")
+        self.log("✅ Đã lưu Token GitHub!")
+
+    def reset_token(self):
+        if messagebox.askyesno("Xác nhận", "Xóa token hiện tại?"):
+            config = self.load_config()
+            if 'gh_pat_token' in config:
+                del config['gh_pat_token']
+                self.save_config(config)
+            self.token_var.set("")
+            self.token_status.config(text="🔴 Token: Đã xóa", foreground="#FF453A")
+            self.log("🔄 Đã reset Token!")
+
+    def load_config(self):
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {}
+
+    def save_config(self, data):
         try:
-            import requests
-            headers = {"Authorization": f"token {token}"}
-            resp = requests.get("https://api.github.com/user", headers=headers, timeout=10)
-            if resp.status_code == 200:
-                user = resp.json().get('login', 'Unknown')
-                messagebox.showinfo("OK", f"✅ Kết nối thành công!\nUser: {user}")
-                self.status_label.config(text=f"✅ Kết nối GitHub: {user}", fg=self.green)
-            else:
-                messagebox.showerror("Lỗi", f"❌ Token không hợp lệ!\nStatus: {resp.status_code}")
-                self.status_label.config(text="❌ Token không hợp lệ", fg=self.red)
+            with open(self.config_file, 'w') as f:
+                json.dump(data, f)
         except Exception as e:
-            messagebox.showerror("Lỗi", f"❌ Không thể kết nối: {e}")
-            self.status_label.config(text=f"❌ Lỗi kết nối", fg=self.red)
-    
-    def toggle_token(self):
-        self.token_entry.config(show='' if self.show_var.get() else '*')
-    
-    def toggle_tunnel(self):
-        if self.cloudflare_process and self.cloudflare_process.poll() is None:
-            self.cloudflare_process.terminate()
-            self.cloudflare_process = None
-            self.url_var.set("Chưa kết nối")
-            self.cf_btn.config(text="▶️ KẾT NỐI CLOUDFLARE", bg=self.purple, state='normal')
-            self.copy_btn.config(state='disabled')
-            self.status_label.config(text="🔴 Tunnel đã ngắt", fg=self.red)
-        else:
-            cf_paths = [
-                r'C:\Users\Administrator\cloudflared.exe',
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cloudflared.exe'),
-                'cloudflared.exe'
-            ]
-            
-            cf_path = None
-            for p in cf_paths:
-                if os.path.exists(p):
-                    cf_path = p
-                    break
-            
-            if not cf_path:
-                messagebox.showerror("Lỗi",
-                    "Không tìm thấy cloudflared.exe!\n\n"
-                    "Tải từ:\n"
-                    "https://github.com/cloudflare/cloudflared/releases\n\n"
-                    "Đặt file vào:\n"
-                    "C:\\Users\\Administrator\\")
+            self.log(f"Không thể lưu cấu hình: {e}")
+
+    # ===== CÁC HÀM UI =====
+    def clear_url_entry(self):
+        self.url_entry.delete(0, tk.END)
+
+    def browse_save_dir(self):
+        dir_path = filedialog.askdirectory(title="Chọn thư mục lưu", initialdir=self.save_dir_var.get())
+        if dir_path:
+            self.save_dir_var.set(dir_path)
+
+    def log(self, message):
+        def _append():
+            self.log_area.insert(tk.END, message + "\n")
+            self.log_area.see(tk.END)
+        self.root.after(0, _append)
+
+    def set_progress(self, val, text=""):
+        def _update():
+            self.progress_bar['value'] = val
+            if text:
+                self.progress_label.config(text=text)
+        self.root.after(0, _update)
+
+    def check_cancel(self):
+        if self.cancel_event.is_set():
+            raise Exception("ĐÃ HỦY BỞI NGƯỜI DÙNG!")
+
+    def ytdl_progress_hook(self, d):
+        if self.cancel_event.is_set():
+            raise yt_dlp.utils.DownloadError("Đã hủy")
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+            downloaded = d.get('downloaded_bytes', 0)
+            if total > 0:
+                percent = (downloaded / total) * 100
+                speed = d.get('_speed_str', '').strip()
+                self.set_progress(percent, f"Đang tải: {percent:.1f}% ({speed})")
+
+    def handle_action_button(self):
+        if not self.is_processing:
+            url = self.url_entry.get().strip()
+            if not url:
+                messagebox.showwarning("Cảnh báo", "Vui lòng dán link YouTube!")
                 return
             
-            self.url_var.set("Đang kết nối...")
-            self.cf_btn.config(text="⏳ ĐANG KẾT NỐI...", bg=self.yellow, state='disabled')
-            self.status_label.config(text="🔄 Đang kết nối Cloudflare...", fg=self.yellow)
+            if self.upload_gh_var.get():
+                config = self.load_config()
+                token = config.get('gh_pat_token', '')
+                if not token:
+                    token = self.token_var.get().strip()
+                    if not token:
+                        messagebox.showwarning("Cảnh báo", "Vui lòng nhập GitHub Token!")
+                        return
+                    config['gh_pat_token'] = token
+                    self.save_config(config)
             
-            def run_tunnel():
+            self.cancel_event.clear()
+            self.current_output_file = None
+            self.is_processing = True
+            
+            self.btn_action.config(text="⏹ HỦY BỎ", style='Danger.TButton')
+            self.log_area.delete(1.0, tk.END)
+            self.set_progress(0, "Đang khởi tạo...")
+            
+            threading.Thread(target=self.process_video, args=(url,), daemon=True).start()
+        else:
+            if not self.cancel_event.is_set():
+                self.cancel_event.set()
+                self.log("⏹ Đang hủy tác vụ...")
+                self.set_progress(0, "Đang dừng...")
+                self.btn_action.config(state=tk.DISABLED)
+
+    def cleanup_files(self):
+        for f in os.listdir('.'):
+            if f.startswith('temp_audio') or f.startswith('temp_sub'):
                 try:
-                    self.cloudflare_process = subprocess.Popen(
-                        [cf_path, 'tunnel', '--url', f'http://localhost:{PORT}'],
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1
-                    )
-                    
-                    for line in self.cloudflare_process.stdout:
-                        match = re.search(r'https://[\w-]+\.trycloudflare\.com', line)
-                        if match:
-                            url = match.group(0)
-                            self.root.after(0, self.set_url, url)
+                    os.remove(f)
+                except:
+                    pass
+
+    def upload_to_github_gist(self, file_path, video_id):
+        self.log("📤 Đang đồng bộ lên GitHub Gist...")
+        self.set_progress(95, "Đang đồng bộ GitHub...")
+        config = self.load_config()
+        token = config.get('gh_pat_token')
+        
+        if not token:
+            self.log("❌ Không tìm thấy Token!")
+            return
+
+        target_filename = f"{video_id}.vtt"
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Tìm Gist cũ
+            existing_gist_id = None
+            page = 1
+            while True:
+                req = urllib.request.Request(f"https://api.github.com/gists?page={page}&per_page=100")
+                req.add_header("Authorization", f"token {token}")
+                try:
+                    with urllib.request.urlopen(req) as resp:
+                        gists = json.loads(resp.read().decode('utf-8'))
+                        if not gists:
                             break
-                            
-                except Exception as e:
-                    self.root.after(0, self.url_var.set, f"Lỗi: {e}")
-                    self.root.after(0, self.cf_btn.config,
-                                  {'text': '▶️ KẾT NỐI CLOUDFLARE', 'bg': self.purple, 'state': 'normal'})
-                    self.root.after(0, self.status_label.config,
-                                  {'text': f'❌ Lỗi tunnel', 'fg': self.red})
-                    return
-                
-                self.root.after(0, self.cf_btn.config,
-                              {'text': '⏹️ NGẮT KẾT NỐI', 'bg': self.red, 'state': 'normal'})
-                self.root.after(0, self.status_label.config,
-                              {'text': f'🌐 Tunnel đã kết nối', 'fg': self.green})
+                        for g in gists:
+                            if target_filename in g.get('files', {}):
+                                existing_gist_id = g['id']
+                                break
+                        if existing_gist_id:
+                            break
+                        page += 1
+                except:
+                    break
+
+            if existing_gist_id:
+                self.log(f"📝 Cập nhật Gist cũ...")
+                payload = {"description": f"Pinyin AI - {video_id}", "files": {target_filename: {"content": content}}}
+                req = urllib.request.Request(f"https://api.github.com/gists/{existing_gist_id}", method="PATCH")
+            else:
+                self.log(f"📝 Tạo Gist mới...")
+                payload = {"description": f"Pinyin AI - {video_id}", "public": True, "files": {target_filename: {"content": content}}}
+                req = urllib.request.Request("https://api.github.com/gists", method="POST")
+
+            req.add_header("Authorization", f"token {token}")
+            req.add_header("Content-Type", "application/json")
             
-            threading.Thread(target=run_tunnel, daemon=True).start()
-    
-    def set_url(self, url):
-        self.url_var.set(url)
-        self.root.clipboard_clear()
-        self.root.clipboard_append(url)
-        self.copy_btn.config(state='normal')
-        self.cf_btn.config(text="⏹️ NGẮT KẾT NỐI", bg=self.red, state='normal')
-        self.status_label.config(text=f"🌐 Tunnel đã kết nối", fg=self.green)
-    
-    def copy_url(self):
-        url = self.url_var.get()
-        if url and 'trycloudflare.com' in url:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(url)
-            messagebox.showinfo("OK", "Đã copy URL vào clipboard!")
+            data = json.dumps(payload).encode('utf-8')
+            response = urllib.request.urlopen(req, data=data)
+            res_data = json.loads(response.read().decode('utf-8'))
+            
+            raw_url = res_data['files'][target_filename]['raw_url']
+            self.log(f"✅ Đã đồng bộ!\n🔗 {raw_url}")
+            
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                self.log("❌ Token không hợp lệ!")
+                config.pop('gh_pat_token', None)
+                self.save_config(config)
+                self.load_token_from_config()
+            else:
+                self.log(f"❌ Lỗi HTTP: {e.code}")
+        except Exception as e:
+            self.log(f"❌ Lỗi: {str(e)}")
 
-def start_server():
-    load_server_config()
-    print(f"Server: http://localhost:{PORT}")
-    print("Mobile chỉ kích hoạt - Server tự làm tất cả!")
-    HTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
+    def format_time(self, seconds):
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int((seconds - int(seconds)) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
-if __name__ == '__main__':
-    load_server_config()
-    threading.Thread(target=start_server, daemon=True).start()
-    
+    def clean_filename(self, name):
+        return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+
+    def align_texts(self, zh_text, translator):
+        if not zh_text.strip():
+            return "", ""
+        p_list = pinyin(zh_text, style=Style.TONE, heteronym=False)
+        pinyin_text = " ".join([item[0] for item in p_list])
+        try:
+            vi_text = translator.translate(zh_text)
+            return pinyin_text, vi_text if vi_text else ""
+        except:
+            return pinyin_text, ""
+
+    def is_valid_vtt(self, sub_file):
+        try:
+            with open(sub_file, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            if not content.startswith("WEBVTT"):
+                return False
+            blocks = re.split(r'\n\s*\n', content)
+            for block in blocks:
+                block = block.strip()
+                if not block or 'WEBVTT' in block or 'Kind:' in block:
+                    continue
+                lines = block.split('\n')
+                if not any('-->' in line for line in lines):
+                    return False
+                text_lines = [l for l in lines if '-->' not in l and not l.isdigit()]
+                if len(text_lines) != 3:
+                    return False
+            return True
+        except:
+            return False
+
+    # ===== XỬ LÝ CHÍNH =====
+    def process_video(self, url):
+        ffmpeg_path = get_ffmpeg_path()
+        save_dir = self.save_dir_var.get()
+        video_id = extract_video_id(url)
+        
+        # Cấu hình chung cho yt-dlp
+        ydl_opts_base = {
+            'ffmpeg_location': ffmpeg_path,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios'],  # Giả client mobile, tránh n challenge
+                }
+            }
+        }
+        
+        if os.path.exists(COOKIE_FILE):
+            ydl_opts_base['cookiefile'] = COOKIE_FILE
+            self.log("✅ Đã tìm thấy cookies.txt")
+        else:
+            self.log("⚠️ Không có cookies.txt, có thể lỗi với video bị hạn chế")
+        
+        try:
+            self.check_cancel()
+            self.log("🔍 Lấy thông tin video...")
+            self.set_progress(5, "Đang lấy thông tin...")
+            
+            with yt_dlp.YoutubeDL(ydl_opts_base) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = self.clean_filename(info.get('title', 'video'))
+                self.current_output_file = os.path.join(save_dir, f"{title}.vtt")
+
+            # Kiểm tra phụ đề có sẵn
+            self.check_cancel()
+            self.log("🔍 Kiểm tra phụ đề YouTube...")
+            self.set_progress(10, "Đang kiểm tra phụ đề...")
+            
+            sub_file = None
+            sub_lang = "zh"
+            try:
+                ydl_opts_sub = {
+                    **ydl_opts_base,
+                    'skip_download': True,
+                    'writesubtitles': True,
+                    'writeautomaticsub': True,
+                    'subtitleslangs': ['zh', 'zh-Hans', 'zh-Hant', 'zh-CN', 'zh-TW', 'en'],
+                    'outtmpl': 'temp_sub',
+                }
+                with yt_dlp.YoutubeDL(ydl_opts_sub) as ydl:
+                    info_sub = ydl.extract_info(url, download=True)
+                    sub_lang = list(info_sub.get('requested_subtitles', {}).keys())[0] if info_sub.get('requested_subtitles') else "zh"
+                    
+                for f in os.listdir('.'):
+                    if f.startswith('temp_sub') and (f.endswith('.vtt') or f.endswith('.srt')):
+                        sub_file = f
+                        break
+            except Exception as e:
+                self.log(f"Không lấy được phụ đề: {str(e)[:80]}")
+
+            if sub_file and self.is_valid_vtt(sub_file):
+                self.check_cancel()
+                self.log(f"✅ Phụ đề [{sub_lang.upper()}] hợp lệ, đang xử lý...")
+                self.convert_subtitle(sub_file, self.current_output_file, sub_lang, video_id)
+                self.cleanup_files()
+                return
+            
+            if sub_file:
+                self.log("Phụ đề không đạt chuẩn 3 dòng, dùng Whisper.")
+                self.cleanup_files()
+
+            # Tải audio chất lượng thấp nhất
+            self.check_cancel()
+            self.log("🎵 Tải audio chất lượng thấp...")
+            self.set_progress(15, "Đang tải audio...")
+            
+            ydl_opts_audio = {
+                **ydl_opts_base,
+                'format': 'worstaudio/worst',  # ✅ CHẤT LƯỢNG THẤP NHẤT
+                'outtmpl': 'temp_audio',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '32',  # 32kbps, đủ cho Whisper
+                }],
+                'progress_hooks': [self.ytdl_progress_hook],
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts_audio) as ydl:
+                ydl.download([url])
+
+            audio_file = None
+            for f in os.listdir('.'):
+                if f.startswith('temp_audio') and f.endswith('.mp3'):
+                    audio_file = f
+                    break
+
+            self.check_cancel()
+            self.log("🧠 Whisper đang nhận diện giọng nói...")
+            self.set_progress(40, "AI đang xử lý...")
+            
+            model = whisper.load_model("base")
+            result = model.transcribe(audio_file, language="zh")
+            detected_lang = result.get("language", "zh")
+            self.log(f"🌐 Ngôn ngữ: {detected_lang.upper()}")
+
+            self.check_cancel()
+            self.log("🔄 Đang dịch và tạo Pinyin...")
+            
+            to_zh = GoogleTranslator(source=detected_lang, target='zh-CN') if not detected_lang.startswith('zh') else None
+            to_vi = GoogleTranslator(source='zh-CN', target='vi')
+            
+            segments = result.get("segments", [])
+            total = len(segments)
+            lines = ["WEBVTT\nKind: captions\nLanguage: zh-TW\n\n"]
+
+            for i, seg in enumerate(segments, 1):
+                self.check_cancel()
+                start = self.format_time(seg["start"])
+                end = self.format_time(seg["end"])
+                raw = seg["text"].strip()
+                if not raw:
+                    continue
+
+                zh_text = raw if detected_lang.startswith('zh') else (to_zh.translate(raw) or raw)
+                pinyin_text, vi_text = self.align_texts(zh_text, to_vi)
+                
+                lines.append(f"{start} --> {end}\n{zh_text}\n{pinyin_text}\n{vi_text}\n\n")
+                pct = 40 + (i / total) * 55
+                self.set_progress(pct, f"Đang dịch: {i}/{total}")
+
+            self.check_cancel()
+            with open(self.current_output_file, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+
+            if self.upload_gh_var.get():
+                self.upload_to_github_gist(self.current_output_file, video_id)
+
+            self.cleanup_files()
+            self.set_progress(100, "✅ Hoàn thành!")
+            self.log(f"\n🎉 Thành công!\n📁 {self.current_output_file}")
+            messagebox.showinfo("Thành công", f"Đã tạo phụ đề:\n{self.current_output_file}")
+
+        except Exception as e:
+            self.cleanup_files()
+            if self.cancel_event.is_set():
+                self.log("\n⏹ Đã hủy tác vụ.")
+                self.set_progress(0, "Đã hủy.")
+            else:
+                self.log(f"❌ Lỗi: {str(e)}")
+                self.set_progress(0, "Lỗi!")
+                messagebox.showerror("Lỗi", str(e))
+        finally:
+            self.root.after(0, self.reset_ui)
+
+    def convert_subtitle(self, sub_file, output_file, source_lang, video_id):
+        with open(sub_file, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            
+        blocks = re.split(r'\n\s*\n', content)
+        lines = ["WEBVTT\nKind: captions\nLanguage: zh-TW\n\n"]
+        
+        is_zh = source_lang.startswith('zh')
+        to_zh = GoogleTranslator(source=source_lang, target='zh-CN') if not is_zh else None
+        to_vi = GoogleTranslator(source='zh-CN', target='vi')
+        
+        total = len(blocks)
+        for i, block in enumerate(blocks, 1):
+            self.check_cancel()
+            if not block.strip() or 'WEBVTT' in block or 'Kind:' in block:
+                continue
+                
+            block_lines = block.strip().split('\n')
+            time_line = ""
+            text_lines = []
+            
+            for line in block_lines:
+                if '-->' in line:
+                    time_line = line.replace(',', '.')
+                elif not line.isdigit() and line.strip():
+                    text_lines.append(line.strip())
+            
+            if time_line and text_lines:
+                clean_text = re.sub(r'<[^>]+>', '', " ".join(text_lines))
+                if clean_text:
+                    zh_text = clean_text if is_zh else (to_zh.translate(clean_text) or clean_text)
+                    pinyin_text, vi_text = self.align_texts(zh_text, to_vi)
+                    lines.append(f"{time_line}\n{zh_text}\n{pinyin_text}\n{vi_text}\n\n")
+            
+            pct = (i / total) * 100
+            self.set_progress(pct, f"Đang xử lý: {i}/{total}")
+
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+
+        if self.upload_gh_var.get():
+            self.upload_to_github_gist(output_file, video_id)
+
+        self.set_progress(100, "✅ Hoàn thành!")
+        self.log(f"\n🎉 Thành công!\n📁 {output_file}")
+        messagebox.showinfo("Thành công", f"Đã tạo phụ đề:\n{output_file}")
+
+    def reset_ui(self):
+        self.is_processing = False
+        self.btn_action.config(text="🎬 TẠO PHỤ ĐỀ AI", style='Primary.TButton', state=tk.NORMAL)
+
+if __name__ == "__main__":
     root = tk.Tk()
-    gui = ServerGUI(root)
-    gui_ref = gui
-    root.protocol("WM_DELETE_WINDOW", lambda: (
-        gui.cloudflare_process.terminate() if gui.cloudflare_process else None,
-        root.destroy()
-    ))
+    app = SubtitleApp(root)
     root.mainloop()
