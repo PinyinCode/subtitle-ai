@@ -74,17 +74,19 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    # 👈 KIỂM TRA TOKEN TRƯỚC KHI CHẠY
-    - name: Debug - Check HF_TOKEN
+    # 👈 CÁCH 1: TẠO FILE .env TRÊN HOST
+    - name: Create .env file with HF_TOKEN
       run: |
-        if [ -n "$HF_TOKEN" ]; then
-          echo "✅ HF_TOKEN is set in runner (length: ${#HF_TOKEN})"
-          echo "✅ Token starts with: ${HF_TOKEN:0:10}..."
-        else
-          echo "❌ HF_TOKEN is NOT set in runner!"
-        fi
+        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" > .env
+        echo "✅ .env file created"
+        echo "HF_TOKEN length: $(wc -c < .env)"
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    
+    - name: Debug - Check .env file
+      run: |
+        cat .env | head -1
+        echo "✅ .env file content verified"
     
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
@@ -118,13 +120,15 @@ jobs:
           
           START_TIME=$(date +%s)
           
-          # 👈 TRUYỀN HF_TOKEN CHẮC CHẮN
+          # 👈 SỬ DỤNG --env-file ĐỂ TRUYỀN TOKEN
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
-            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            --env-file .env \
             ghcr.io/pinyincode/subtitle-ai:latest \
-            bash -c "export HF_TOKEN='${{ secrets.HF_TOKEN }}' && python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt' 2>&1"
+            python scripts/generate_subtitles.py \
+            --audio "/app/$AUDIO_FILE" \
+            --output "/app/output/${VIDEO_ID}.vtt"
           
           EXIT_CODE=$?
           END_TIME=$(date +%s)
@@ -175,6 +179,7 @@ jobs:
         rm -f output/*.vtt
         rm -f output/*_summary.json
         touch output/.gitkeep
+        rm -f .env
         echo "✅ Cleaned up"
         
         git config user.name "Actions"
