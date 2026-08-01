@@ -2,6 +2,7 @@
 """
 YouTube Subtitle Generator - Faster Whisper
 Tao phu de 3 dong: Chinese + Pinyin + Vietnamese
+CHAY TRUC TIEP TREN RUNNER (KHONG DUNG DOCKER)
 """
 
 import os
@@ -13,39 +14,19 @@ from pathlib import Path
 from datetime import datetime
 
 # ============================================================
-# KIỂM TRA TOKEN - IN RA CHI TIẾT
+# KIỂM TRA TOKEN
 # ============================================================
 print("=" * 50)
 print("ENVIRONMENT CHECK")
 print("=" * 50)
 
-# Kiểm tra token
 hf_token = os.environ.get('HF_TOKEN')
 if hf_token:
+    os.environ['HF_TOKEN'] = hf_token
     print(f"✅ HF_TOKEN FOUND (length: {len(hf_token)})")
     print(f"✅ Token starts with: {hf_token[:10]}...")
 else:
-    print("❌ HF_TOKEN NOT FOUND in environment!")
-    print("⚠️ Trying to load from .env file...")
-    
-    # Thử đọc từ .env
-    try:
-        with open('.env', 'r') as f:
-            for line in f:
-                if line.startswith('HF_TOKEN='):
-                    token = line.strip().split('=', 1)[1]
-                    os.environ['HF_TOKEN'] = token
-                    print(f"✅ HF_TOKEN loaded from .env file (length: {len(token)})")
-                    break
-    except:
-        pass
-
-# Kiểm tra lại sau khi load
-hf_token = os.environ.get('HF_TOKEN')
-if hf_token:
-    print(f"✅ HF_TOKEN is now set (length: {len(hf_token)})")
-else:
-    print("❌ HF_TOKEN is STILL NOT set!")
+    print("❌ HF_TOKEN NOT FOUND!")
     print("⚠️ Rate limits will apply - downloads will be slower")
 
 print("=" * 50)
