@@ -67,30 +67,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    # 👈 CÀI ĐẶT TRỰC TIẾP TRÊN RUNNER
     - name: Setup Python environment
       run: |
         python -m pip install --upgrade pip
         pip install faster-whisper deep-translator pypinyin
         echo "✅ All packages installed"
     
-    - name: Debug - Check HF_TOKEN
-      run: |
-        if [ -n "$HF_TOKEN" ]; then
-          echo "✅ HF_TOKEN is set (length: ${#HF_TOKEN})"
-          echo "✅ Token: ${HF_TOKEN:0:10}..."
-        else
-          echo "❌ HF_TOKEN is NOT set!"
-        fi
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
-    
-    # 👈 CHẠY SCRIPT TRỰC TIẾP (KHÔNG DÙNG DOCKER)
     - name: Process audio with AI
       id: process
       timeout-minutes: 30
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
         
