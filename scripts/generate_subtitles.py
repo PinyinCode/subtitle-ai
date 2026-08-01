@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-YouTube Subtitle Generator - Whisper AI
+YouTube Subtitle Generator - Faster Whisper
 Tao phu de 3 dong: Chinese + Pinyin + Vietnamese
 Encoding: UTF-8 (khong BOM)
 CHI XU LY 1 FILE AUDIO MOI NHAT
@@ -14,11 +14,12 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+# 👈 CÀI FASTER-WHISPER
 try:
-    import whisper
+    from faster_whisper import WhisperModel
 except ImportError:
-    os.system('pip install -q openai-whisper')
-    import whisper
+    os.system('pip install -q faster-whisper')
+    from faster_whisper import WhisperModel
 
 try:
     from deep_translator import GoogleTranslator
@@ -43,12 +44,16 @@ def format_time(seconds):
 
 
 def generate_subtitle(audio_path, output_path=None):
-    """Generate VTT subtitle from audio file"""
+    """Generate VTT subtitle from audio file using faster-whisper"""
     
     audio_file = Path(audio_path)
     video_id = audio_file.stem
     
-    # Nếu không chỉ định output, dùng thư mục mặc định
+    # Kiểm tra file audio
+    print(f"🔍 Audio file: {audio_path}")
+    print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
+    
+    # Tạo output path
     if output_path is None:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -61,36 +66,55 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"Processing: {video_id}")
     print(f"Audio: {audio_path}")
     print(f"Output: {output_file}")
-    print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
+    if audio_file.exists():
+        print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
-    # Load Whisper model
-    print("Loading Whisper model (base)...")
-    model = whisper.load_model("base")
+    # 👈 LOAD FASTER-WHISPER MODEL
+    print("Loading Faster-Whisper model (base)...")
+    print("⏳ This may take 10-30 seconds to download model...")
+    
+    # Dùng CPU với int8 để tiết kiệm RAM và tăng tốc
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+    # 👆 Có thể đổi thành "small", "medium", "large-v3"
+    # compute_type: "int8" (nhanh nhất), "float16" (cân bằng), "float32" (chính xác nhất)
+    
     print("Model loaded")
     
-    # Transcribe audio
+    # 👈 TRANSCRIBE VỚI FASTER-WHISPER
     print("Transcribing audio...")
     start_time = datetime.now()
     
-    result = model.transcribe(
+    segments, info = model.transcribe(
         audio_path,
-        language=None,
-        task="transcribe",
-        verbose=False
+        beam_size=5,              # 👈 Tăng độ chính xác
+        language=None,            # 👈 Tự động phát hiện
+        task="transcribe",        # 👈 Chỉ transcribe, không dịch
+        vad_filter=True,          # 👈 Lọc im lặng để tăng tốc
+        vad_parameters=dict(
+            min_silence_duration_ms=500,
+            threshold=0.5
+        )
     )
+    
+    # Lấy thông tin ngôn ngữ
+    detected_lang = info.language
+    print(f"Detected language: {detected_lang}")
+    
+    # Chuyển segments sang list
+    segment_list = []
+    for seg in segments:
+        segment_list.append({
+            'start': seg.start,
+            'end': seg.end,
+            'text': seg.text.strip()
+        })
     
     elapsed = (datetime.now() - start_time).total_seconds()
     print(f"Transcription done in {elapsed:.1f}s")
+    print(f"Segments: {len(segment_list)}")
     
-    # Get results
-    detected_lang = result.get("language", "zh")
-    segments = result.get("segments", [])
-    
-    print(f"Language: {detected_lang}")
-    print(f"Segments: {len(segments)}")
-    
-    if not segments:
+    if not segment_list:
         print("No segments found!")
         return None
     
@@ -99,8 +123,11 @@ def generate_subtitle(audio_path, output_path=None):
     
     to_chinese = None
     if not detected_lang.startswith('zh'):
-        to_chinese = GoogleTranslator(source=detected_lang, target='zh-CN')
-        print(f"  Chinese: {detected_lang} -> zh-CN")
+        try:
+            to_chinese = GoogleTranslator(source=detected_lang, target='zh-CN')
+            print(f"  Chinese: {detected_lang} -> zh-CN")
+        except:
+            print(f"⚠️ Cannot translate from {detected_lang} to Chinese")
     
     to_vietnamese = GoogleTranslator(source='zh-CN', target='vi')
     print("  Vietnamese: zh-CN -> vi")
@@ -118,12 +145,13 @@ def generate_subtitle(audio_path, output_path=None):
     
     success_count = 0
     error_count = 0
+    total = len(segment_list)
     
-    for i, segment in enumerate(segments, 1):
+    for i, seg in enumerate(segment_list, 1):
         try:
-            start = format_time(segment["start"])
-            end = format_time(segment["end"])
-            text = segment["text"].strip()
+            start = format_time(seg['start'])
+            end = format_time(seg['end'])
+            text = seg['text']
             
             if not text:
                 continue
@@ -160,32 +188,44 @@ def generate_subtitle(audio_path, output_path=None):
             success_count += 1
             
             if i % 20 == 0:
-                print(f"   {i}/{len(segments)} ({100*i//len(segments)}%)")
+                print(f"   {i}/{total} ({100*i//total}%)")
                 
         except Exception as e:
             error_count += 1
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # Save VTT file - DUNG UTF-8 KHONG BOM
-    print(f"\nSaving to: {output_file}")
+    # Save VTT file
+    print(f"\n💾 Saving to: {output_file}")
     
     vtt_content = '\n'.join(vtt_lines)
     
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(vtt_content)
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(vtt_content)
+        print(f"✅ File written successfully!")
+    except Exception as e:
+        print(f"❌ Error writing file: {e}")
+        return None
+    
+    # Kiểm tra file đã tạo
+    if output_file.exists():
+        print(f"✅ File exists! Size: {output_file.stat().st_size} bytes")
+    else:
+        print(f"❌ File does NOT exist after write!")
+        return None
     
     # Save summary
     summary = {
         'video_id': video_id,
         'language': detected_lang,
-        'total_segments': len(segments),
+        'total_segments': len(segment_list),
         'success_segments': success_count,
         'error_segments': error_count,
-        'duration': segments[-1]['end'] if segments else 0,
+        'duration': segment_list[-1]['end'] if segment_list else 0,
         'transcription_time': round(elapsed, 1),
         'output_file': str(output_file),
-        'output_size': output_file.stat().st_size,
+        'output_size': output_file.stat().st_size if output_file.exists() else 0,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -197,8 +237,9 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"COMPLETE!")
     print(f"{'='*50}")
     print(f"Output: {output_file}")
-    print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
-    print(f"Success: {success_count}/{len(segments)}")
+    if output_file.exists():
+        print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
+    print(f"Success: {success_count}/{len(segment_list)}")
     print(f"Language: {detected_lang}")
     print(f"Duration: {summary['duration']:.1f}s")
     print(f"{'='*50}\n")
@@ -216,7 +257,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Nếu có chỉ định file cụ thể
     if args.audio:
         audio_path = args.audio
         if not os.path.exists(audio_path):
@@ -229,7 +269,6 @@ def main():
             print(f"\n✅ Done: {result}")
         return
     
-    # Nếu không chỉ định file, tìm file mới nhất
     print("\n🔍 Finding audio files...")
     audio_files = glob.glob("data/audio/*.m4a")
     
@@ -237,18 +276,15 @@ def main():
         print("❌ No audio files found in data/audio/")
         return
     
-    # Sắp xếp theo thời gian sửa đổi, lấy file mới nhất
     audio_files.sort(key=os.path.getmtime, reverse=True)
     latest_audio = audio_files[0]
     
     print(f"Found {len(audio_files)} file(s)")
     print(f"📌 Processing latest: {latest_audio}")
     
-    # Bỏ qua các file cũ
     if len(audio_files) > 1:
         print(f"   Skipping {len(audio_files)-1} old file(s)")
     
-    # Chỉ xử lý 1 file
     try:
         result = generate_subtitle(latest_audio)
         if result:
