@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Push subtitles to GitHub Gist - Dùng API trực tiếp"""
-import os, json, glob, requests
+import os
+import sys
+import json
+import glob
+import requests
 
-# Đọc cả 2 biến
-token = os.environ.get('GH_TOKEN') or os.environ.get('GIST_TOKEN')
+print("📤 Starting Gist upload...")
+
+# Đọc token
+token = os.environ.get('GIST_TOKEN') or os.environ.get('GH_TOKEN')
 
 if not token:
-    print('No token found, skipping Gist push')
-    exit()
+    print('❌ No token found, skipping Gist push')
+    sys.exit(0)
+
+# 👈 LẤY VIDEO_ID TỪ ENV
+video_id = os.environ.get('VIDEO_ID')
 
 headers = {
     "Authorization": f"token {token}",
@@ -16,66 +25,75 @@ headers = {
 
 vtt_files = glob.glob("output/*.vtt")
 
+print(f"📁 Found {len(vtt_files)} VTT files:")
+for f in vtt_files:
+    print(f"  - {f}")
+
 if not vtt_files:
-    print('No VTT files found')
-    exit()
+    print('❌ No VTT files found')
+    sys.exit(0)
 
 for f in vtt_files:
-    video_id = f.replace('output/', '').replace('.vtt', '')
+    # 👈 Ưu tiên dùng VIDEO_ID từ ENV
+    file_video_id = os.path.basename(f).replace('.vtt', '')
+    vid = video_id or file_video_id
     
-    with open(f, 'r', encoding='utf-8') as fh:
-        content = fh.read()
+    print(f'\n📤 Processing: {vid}')
     
-    print(f'Pushing Gist for: {video_id}')
+    # Đọc nội dung file
+    try:
+        with open(f, 'r', encoding='utf-8') as fh:
+            content = fh.read()
+        print(f"✅ Read {len(content)} characters")
+    except Exception as e:
+        print(f"❌ Error reading file: {e}")
+        continue
     
-    # Kiểm tra Gist đã tồn tại chưa
+    # Kiểm tra Gist đã tồn tại
     gist_exists = False
     gist_id = None
     
     try:
-        # Lấy danh sách Gist của user
         resp = requests.get('https://api.github.com/gists', headers=headers, params={'per_page': 100})
         if resp.status_code == 200:
             for gist in resp.json():
-                if gist.get('description', '').endswith(video_id):
+                if gist.get('description', '').endswith(vid):
                     gist_exists = True
                     gist_id = gist['id']
+                    print(f"✅ Found existing Gist: {gist_id}")
                     break
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠️ Error checking Gists: {e}")
+    
+    # Tạo hoặc update Gist
+    data = {
+        "description": f"Pinyin AI Subtitle - {vid}",
+        "public": False,
+        "files": {
+            f"{vid}.vtt": {"content": content}
+        }
+    }
     
     if gist_exists and gist_id:
-        # Update Gist cũ
-        print(f'Updating existing Gist: {gist_id}')
+        print(f'🔄 Updating Gist: {gist_id}')
         response = requests.patch(
             f'https://api.github.com/gists/{gist_id}',
             headers=headers,
-            json={
-                "description": f"YouTube Subtitle - {video_id}",
-                "files": {
-                    f"{video_id}.vtt": {"content": content}
-                }
-            }
+            json=data
         )
     else:
-        # Tạo Gist mới
-        print(f'Creating new Gist for: {video_id}')
+        print(f'🆕 Creating new Gist for: {vid}')
         response = requests.post(
             'https://api.github.com/gists',
             headers=headers,
-            json={
-                "description": f"YouTube Subtitle - {video_id}",
-                "public": False,
-                "files": {
-                    f"{video_id}.vtt": {"content": content}
-                }
-            }
+            json=data
         )
     
     if response.status_code in [200, 201]:
-        data = response.json()
-        print(f'✅ Gist saved: {data["html_url"]}')
+        result = response.json()
+        gist_url = result.get('html_url', '')
+        print(f'✅ Gist saved: {gist_url}')
     else:
         print(f'❌ Error {response.status_code}: {response.text[:200]}')
 
-print('Done!')
+print('\n✅ Done!')
