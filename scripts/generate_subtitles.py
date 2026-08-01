@@ -14,6 +14,16 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+# 👈 SET HF_TOKEN TỪ ENV
+hf_token = os.environ.get('HF_TOKEN')
+if hf_token:
+    os.environ['HF_TOKEN'] = hf_token
+    print("✅ HF_TOKEN loaded from environment")
+
+# 👈 TẮT CẢNH BÁO
+import warnings
+warnings.filterwarnings("ignore")
+
 # 👈 CÀI FASTER-WHISPER
 try:
     from faster_whisper import WhisperModel
@@ -87,10 +97,10 @@ def generate_subtitle(audio_path, output_path=None):
     
     segments, info = model.transcribe(
         audio_path,
-        beam_size=5,              # 👈 Tăng độ chính xác
-        language=None,            # 👈 Tự động phát hiện
-        task="transcribe",        # 👈 Chỉ transcribe, không dịch
-        vad_filter=True,          # 👈 Lọc im lặng để tăng tốc
+        beam_size=5,
+        language=None,
+        task="transcribe",
+        vad_filter=True,
         vad_parameters=dict(
             min_silence_duration_ms=500,
             threshold=0.5
