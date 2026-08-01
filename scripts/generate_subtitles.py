@@ -2,7 +2,6 @@
 """
 YouTube Subtitle Generator - Faster Whisper
 Tao phu de 3 dong: Chinese + Pinyin + Vietnamese
-CHAY TRUC TIEP TREN RUNNER (KHONG DUNG DOCKER)
 """
 
 import os
@@ -14,27 +13,19 @@ from pathlib import Path
 from datetime import datetime
 
 # ============================================================
-# KIỂM TRA TOKEN
+# TẮT HOÀN TOÀN CẢNH BÁO
 # ============================================================
-print("=" * 50)
-print("ENVIRONMENT CHECK")
-print("=" * 50)
-
-hf_token = os.environ.get('HF_TOKEN')
-if hf_token:
-    os.environ['HF_TOKEN'] = hf_token
-    print(f"✅ HF_TOKEN FOUND (length: {len(hf_token)})")
-    print(f"✅ Token starts with: {hf_token[:10]}...")
-else:
-    print("❌ HF_TOKEN NOT FOUND!")
-    print("⚠️ Rate limits will apply - downloads will be slower")
-
-print("=" * 50)
-
-# Tắt cảnh báo
 import warnings
 warnings.filterwarnings("ignore")
+
+# Tắt cảnh báo của huggingface_hub
 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Tắt cảnh báo TensorFlow
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'  # Tắt HF Transfer (gây cảnh báo)
+
+# Chuyển hướng stderr để bỏ qua cảnh báo
+import sys
+sys.stderr = open(os.devnull, 'w')  # Tắt stderr
 # ============================================================
 
 try:
@@ -88,7 +79,8 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"{'='*50}\n")
     
     print("Loading Faster-Whisper model (base)...")
-    print("⏳ Downloading model...")
+    print("⏳ Downloading model (may take 10-30 seconds)...")
+    print("💡 Ignore any warnings about HF_TOKEN - it still works!")
     
     model = WhisperModel("base", device="cpu", compute_type="int8")
     
@@ -253,6 +245,9 @@ def main():
     parser.add_argument('--output', help='Path to output VTT file')
     
     args = parser.parse_args()
+    
+    # Khôi phục stderr để in lỗi nghiêm trọng
+    sys.stderr = sys.__stderr__
     
     if args.audio:
         audio_path = args.audio
