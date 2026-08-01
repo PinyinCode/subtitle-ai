@@ -1,149 +1,34 @@
-name: AI Subtitle Generator
+name: Build and Push Docker Image
 
 on:
   push:
     paths:
-      - data/audio/*.m4a
+      - Dockerfile
+      - scripts/**/*
   workflow_dispatch:
-  repository_dispatch:
-    types:
-      - process_audio
-      - process_drive_audio
 
 permissions:
-  contents: write
-  packages: read
+  contents: read
+  packages: write
 
 jobs:
-  # ===== JOB 1: DOWNLOAD FROM DRIVE (CHỈ CHẠY KHI CÓ DRIVE EVENT) =====
-  download_drive:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.event.action == 'process_drive_audio'
-    
-    outputs:
-      video_id: ${{ steps.download.outputs.video_id }}
-      has_audio: ${{ steps.download.outputs.has_audio }}
-    
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install gdown
-      run: |
-        pip install gdown
-        echo "✅ gdown installed"
-    
-    - name: Download from Google Drive
-      id: download
-      env:
-        DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
-        VIDEO_ID: ${{ github.event.client_payload.video_id }}
-      run: |
-        mkdir -p data/audio
-        
-        echo "📥 Downloading from Google Drive..."
-        echo "File ID: $DRIVE_FILE_ID"
-        echo "Video ID: $VIDEO_ID"
-        
-        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
-        
-        if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
-          echo "✅ Downloaded: ${VIDEO_ID}.m4a"
-          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
-          echo "has_audio=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ Download failed!"
-          echo "has_audio=false" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-
-  # ===== JOB 2: XỬ LÝ AI (CHẠY SAU KHI DOWNLOAD HOẶC PUSH) =====
-  process_audio:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: download_drive  # 👈 CHỈ CHẠY SAU KHI download_drive HOÀN TẤT
-    if: |
-      always() &&
-      (github.event.action == 'process_audio' || 
-       github.event_name == 'push' || 
-       github.event_name == 'workflow_dispatch' ||
-       (github.event.action == 'process_drive_audio' && needs.download_drive.outputs.has_audio == 'true'))
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Login to GitHub Container Registry
+    - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     
-    - name: Pull AI Docker image
-      run: |
-        docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
-        echo "✅ Docker image ready"
-    
-    - name: Process audio with AI
-      id: process
-      run: |
-        AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
-        
-        if [ -n "$AUDIO_FILE" ]; then
-          VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
-          echo "🎬 Processing: $VIDEO_ID"
-          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
-          
-          mkdir -p output
-          
-          docker run --rm \
-            -v $(pwd):/app \
-            -w /app \
-            ghcr.io/pinyincode/subtitle-ai:latest \
-            python scripts/generate_subtitles.py \
-            --audio "/app/$AUDIO_FILE" \
-            --output "/app/output/${VIDEO_ID}.vtt"
-          
-          echo "📁 Checking output files:"
-          ls -la output/
-          
-          if [ -f "output/${VIDEO_ID}.vtt" ]; then
-            echo "✅ Processing completed"
-            echo "has_audio=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ VTT file NOT created!"
-            echo "has_audio=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-        else
-          echo "ℹ️ No audio file found"
-          echo "has_audio=false" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Upload subtitle to Gist
-      if: steps.process.outputs.has_audio == 'true'
-      env:
-        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        VIDEO_ID: ${{ steps.process.outputs.video_id }}
-      run: |
-        echo "📤 Uploading subtitle to Gist..."
-        echo "📁 Files in output:"
-        ls -la output/
-        echo "🎯 Video ID: $VIDEO_ID"
-        python scripts/push_to_gist.py
-    
-    - name: Cleanup
-      if: always()
-      run: |
-        rm -f data/audio/*.m4a
-        touch data/audio/.gitkeep
-        rm -f output/*.vtt
-        rm -f output/*_summary.json
-        touch output/.gitkeep
-        echo "✅ Cleaned up"
-        
-        git config user.name "Actions"
-        git config user.email "actions@github.com"
-        git add -A
-        git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push) || echo "Push skipped"
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository }}:latest
+          ghcr.io/${{ github.repository }}:${{ github.sha }}
