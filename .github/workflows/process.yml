@@ -15,9 +15,10 @@ permissions:
   packages: read
 
 jobs:
+  # ===== JOB 1: DOWNLOAD FROM GOOGLE DRIVE =====
   download_drive:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     if: github.event.action == 'process_drive_audio'
     
     outputs:
@@ -25,26 +26,13 @@ jobs:
       has_audio: ${{ steps.download.outputs.has_audio }}
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Check event type
-      run: |
-        echo "📌 Event action: ${{ github.event.action }}"
-        echo "📌 Event name: ${{ github.event_name }}"
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Install gdown
       run: |
         pip install gdown
         echo "✅ gdown installed"
-    
-    - name: Debug - Before download
-      run: |
-        echo "📁 Current directory:"
-        pwd
-        echo "📁 Files before download:"
-        ls -la
-        echo "📁 data/audio exists?"
-        ls -la data/audio/ 2>/dev/null || echo "❌ data/audio does not exist yet"
     
     - name: Download from Google Drive
       id: download
@@ -60,13 +48,8 @@ jobs:
         
         gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
         
-        echo "📁 After download - data/audio contents:"
-        ls -la data/audio/
-        
         if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
           echo "✅ Downloaded: ${VIDEO_ID}.m4a"
-          echo "📁 File size:"
-          du -sh "data/audio/${VIDEO_ID}.m4a"
           echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
           echo "has_audio=true" >> $GITHUB_OUTPUT
         else
@@ -75,9 +58,10 @@ jobs:
           exit 1
         fi
 
+  # ===== JOB 2: PROCESS AUDIO WITH AI =====
   process_audio:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: download_drive
     if: |
       always() &&
@@ -87,18 +71,8 @@ jobs:
        (github.event.action == 'process_drive_audio' && needs.download_drive.outputs.has_audio == 'true'))
     
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Debug - Check files before AI
-      run: |
-        echo "📁 Current directory:"
-        pwd
-        echo "📁 All files:"
-        ls -la
-        echo "📁 Check data/audio:"
-        ls -la data/audio/ || echo "❌ data/audio does not exist!"
-        echo "📁 Check audio files:"
-        find . -name "*.m4a" -type f | head -5 || echo "❌ No audio files found"
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
@@ -114,10 +88,11 @@ jobs:
     
     - name: Process audio with AI
       id: process
+      timeout-minutes: 30
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        echo "📁 Searching for audio files..."
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
-        echo "📁 Found: $AUDIO_FILE"
         
         if [ -n "$AUDIO_FILE" ]; then
           VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
@@ -127,13 +102,28 @@ jobs:
           mkdir -p output
           
           echo "📁 Running Docker container..."
+          echo "⏳ This may take 10-20 minutes for long videos..."
+          
+          START_TIME=$(date +%s)
+          
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ghcr.io/pinyincode/subtitle-ai:latest \
-            python scripts/generate_subtitles.py \
-            --audio "/app/$AUDIO_FILE" \
-            --output "/app/output/${VIDEO_ID}.vtt"
+            bash -c "export HF_TOKEN='${{ secrets.HF_TOKEN }}' && python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt' 2>&1"
+          
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          
+          echo "📁 Docker execution time: $((DURATION / 60)) minutes $((DURATION % 60)) seconds"
+          echo "📁 Docker exit code: $EXIT_CODE"
+          
+          if [ $EXIT_CODE -eq 124 ]; then
+            echo "❌ Docker container timed out after 30 minutes!"
+            exit 1
+          fi
           
           echo "📁 Checking output files:"
           ls -la output/
@@ -164,13 +154,24 @@ jobs:
         echo "🎯 Video ID: $VIDEO_ID"
         python scripts/push_to_gist.py
     
+    - name: Notify completion
+      if: steps.process.outputs.has_audio == 'true'
+      run: |
+        VIDEO_ID=${{ steps.process.outputs.video_id }}
+        echo "🎉🎉🎉 Subtitle for ${VIDEO_ID} is ready!"
+        echo "📁 Check your Gist: ${VIDEO_ID}.vtt"
+    
     - name: Cleanup
       if: always()
       run: |
-        echo "🧹 Cleaning up..."
         rm -f data/audio/*.m4a
         touch data/audio/.gitkeep
         rm -f output/*.vtt
         rm -f output/*_summary.json
         touch output/.gitkeep
         echo "✅ Cleaned up"
+        
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add -A
+        git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push) || echo "Push skipped"
