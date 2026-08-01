@@ -15,7 +15,7 @@ permissions:
   packages: read
 
 jobs:
-  # ===== JOB 1: DOWNLOAD FROM DRIVE (CHỈ CHẠY KHI CÓ DRIVE EVENT) =====
+  # ===== JOB 1: DOWNLOAD FROM DRIVE =====
   download_drive:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -57,11 +57,11 @@ jobs:
           exit 1
         fi
 
-  # ===== JOB 2: XỬ LÝ AI (CHẠY SAU KHI DOWNLOAD HOẶC PUSH) =====
+  # ===== JOB 2: XỬ LÝ AI =====
   process_audio:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: download_drive  # 👈 CHỈ CHẠY SAU KHI download_drive HOÀN TẤT
+    needs: download_drive
     if: |
       always() &&
       (github.event.action == 'process_audio' || 
@@ -86,6 +86,8 @@ jobs:
     
     - name: Process audio with AI
       id: process
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}  # 👈 THÊM SECRET
       run: |
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
         
@@ -96,9 +98,11 @@ jobs:
           
           mkdir -p output
           
+          # 👈 TRUYỀN HF_TOKEN VÀO CONTAINER
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
+            -e HF_TOKEN=$HF_TOKEN \
             ghcr.io/pinyincode/subtitle-ai:latest \
             python scripts/generate_subtitles.py \
             --audio "/app/$AUDIO_FILE" \
