@@ -15,7 +15,7 @@ permissions:
   packages: read
 
 jobs:
-  # ===== JOB 1: DOWNLOAD FROM DRIVE =====
+  # ===== JOB 1: DOWNLOAD FROM GOOGLE DRIVE =====
   download_drive:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -26,7 +26,8 @@ jobs:
       has_audio: ${{ steps.download.outputs.has_audio }}
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Install gdown
       run: |
@@ -57,7 +58,7 @@ jobs:
           exit 1
         fi
 
-  # ===== JOB 2: XỬ LÝ AI =====
+  # ===== JOB 2: PROCESS AUDIO WITH AI =====
   process_audio:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -70,18 +71,27 @@ jobs:
        (github.event.action == 'process_drive_audio' && needs.download_drive.outputs.has_audio == 'true'))
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     # 👈 DEBUG: KIỂM TRA TOKEN
     - name: Debug - Check HF_TOKEN
       run: |
         if [ -n "$HF_TOKEN" ]; then
           echo "✅ HF_TOKEN is set (length: ${#HF_TOKEN})"
+          echo "HF_TOKEN first 10 chars: ${HF_TOKEN:0:10}..."
         else
           echo "❌ HF_TOKEN is NOT set!"
         fi
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    
+    # 👈 TẠO FILE .env CHO DOCKER
+    - name: Create .env file for Docker
+      run: |
+        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" > .env
+        echo "✅ .env file created"
+        cat .env | head -1
     
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
@@ -97,8 +107,6 @@ jobs:
     
     - name: Process audio with AI
       id: process
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
         
@@ -109,11 +117,13 @@ jobs:
           
           mkdir -p output
           
-          echo "📁 Running Docker with HF_TOKEN..."
+          echo "📁 Running Docker container with HF_TOKEN..."
+          
+          # 👈 SỬ DỤNG --env-file ĐỂ TRUYỀN TOKEN VÀO CONTAINER
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
-            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            --env-file .env \
             ghcr.io/pinyincode/subtitle-ai:latest \
             python scripts/generate_subtitles.py \
             --audio "/app/$AUDIO_FILE" \
@@ -156,6 +166,7 @@ jobs:
         rm -f output/*.vtt
         rm -f output/*_summary.json
         touch output/.gitkeep
+        rm -f .env
         echo "✅ Cleaned up"
         
         git config user.name "Actions"
