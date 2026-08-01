@@ -19,6 +19,8 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # 👈 CHỈ CHẠY KHI process_audio HOẶC push
+    if: github.event.action == 'process_audio' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     
     steps:
     - uses: actions/checkout@v4
@@ -48,15 +50,25 @@ jobs:
           mkdir -p output
           
           docker run --rm \
-            -v $(pwd):/app \
+            -v $(pwd)/data:/app/data \
+            -v $(pwd)/output:/app/output \
             -w /app \
             ghcr.io/pinyincode/subtitle-ai:latest \
             python scripts/generate_subtitles.py \
-            --audio "/app/$AUDIO_FILE" \
+            --audio "/app/data/audio/${VIDEO_ID}.m4a" \
             --output "/app/output/${VIDEO_ID}.vtt"
           
-          echo "✅ Processing completed"
-          echo "has_audio=true" >> $GITHUB_OUTPUT
+          echo "📁 Checking output files:"
+          ls -la output/
+          
+          if [ -f "output/${VIDEO_ID}.vtt" ]; then
+            echo "✅ Processing completed"
+            echo "has_audio=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ VTT file NOT created!"
+            echo "has_audio=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
         else
           echo "ℹ️ No audio file found"
           echo "has_audio=false" >> $GITHUB_OUTPUT
@@ -68,6 +80,9 @@ jobs:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        echo "📤 Uploading subtitle to Gist..."
+        echo "📁 Files in output:"
+        ls -la output/
         python scripts/push_to_gist.py
     
     - name: Cleanup
@@ -75,11 +90,9 @@ jobs:
       run: |
         rm -f data/audio/*.m4a
         touch data/audio/.gitkeep
-        
         rm -f output/*.vtt
         rm -f output/*_summary.json
         touch output/.gitkeep
-        
         echo "✅ Cleaned up"
         
         git config user.name "Actions"
@@ -91,7 +104,8 @@ jobs:
   process_drive:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event.action == 'process_drive_audio' || github.event.client_payload.drive_file_id
+    # 👈 CHỈ CHẠY KHI process_drive_audio
+    if: github.event.action == 'process_drive_audio'
     
     steps:
     - uses: actions/checkout@v4
@@ -144,18 +158,23 @@ jobs:
         mkdir -p output
         
         docker run --rm \
-          -v $(pwd):/app \
+          -v $(pwd)/data:/app/data \
+          -v $(pwd)/output:/app/output \
           -w /app \
           ghcr.io/pinyincode/subtitle-ai:latest \
           python scripts/generate_subtitles.py \
           --audio "/app/data/audio/${VIDEO_ID}.m4a" \
           --output "/app/output/${VIDEO_ID}.vtt"
         
+        echo "📁 Checking output files:"
+        ls -la output/
+        
         if [ -f "output/${VIDEO_ID}.vtt" ]; then
           echo "✅ AI processing completed!"
           echo "has_subtitle=true" >> $GITHUB_OUTPUT
         else
-          echo "❌ AI processing failed!"
+          echo "❌ AI processing failed - VTT file not found!"
+          echo "has_subtitle=false" >> $GITHUB_OUTPUT
           exit 1
         fi
     
@@ -167,6 +186,8 @@ jobs:
         VIDEO_ID: ${{ github.event.client_payload.video_id }}
       run: |
         echo "📤 Uploading subtitle to Gist..."
+        echo "📁 Files in output:"
+        ls -la output/
         python scripts/push_to_gist.py
     
     - name: Notify completion
