@@ -8,18 +8,21 @@ CHI XU LY 1 FILE AUDIO MOI NHAT
 
 import os
 import sys
+import json
+import glob
+import argparse
+from pathlib import Path
+from datetime import datetime
 
 # ============================================================
-# 👈 PHẦN XỬ LÝ HF_TOKEN - ĐẶT Ở ĐẦU FILE
+# XỬ LÝ HF_TOKEN - ĐẶT Ở ĐẦU FILE
 # ============================================================
 hf_token = os.environ.get('HF_TOKEN')
 if hf_token:
-    # Ép buộc thiết lập token cho huggingface_hub
     os.environ['HF_TOKEN'] = hf_token
     print(f"✅ HF_TOKEN loaded successfully (length: {len(hf_token)})")
 else:
     print("❌ HF_TOKEN not found in environment! Rate limits may apply.")
-    print("⚠️ Please set HF_TOKEN secret in GitHub Actions.")
 
 # Tắt các cảnh báo không cần thiết
 import warnings
@@ -61,11 +64,9 @@ def generate_subtitle(audio_path, output_path=None):
     audio_file = Path(audio_path)
     video_id = audio_file.stem
     
-    # Kiểm tra file audio
     print(f"🔍 Audio file: {audio_path}")
     print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
     
-    # Tạo output path
     if output_path is None:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -82,18 +83,15 @@ def generate_subtitle(audio_path, output_path=None):
         print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
-    # 👈 LOAD FASTER-WHISPER MODEL
+    # Load Faster-Whisper model
     print("Loading Faster-Whisper model (base)...")
     print("⏳ This may take 10-30 seconds to download model...")
     
-    # Dùng CPU với int8 để tiết kiệm RAM và tăng tốc
     model = WhisperModel("base", device="cpu", compute_type="int8")
-    # 👆 Có thể đổi thành "small", "medium", "large-v3"
-    # compute_type: "int8" (nhanh nhất), "float16" (cân bằng), "float32" (chính xác nhất)
     
     print("Model loaded")
     
-    # 👈 TRANSCRIBE VỚI FASTER-WHISPER
+    # Transcribe
     print("Transcribing audio...")
     start_time = datetime.now()
     
@@ -109,11 +107,9 @@ def generate_subtitle(audio_path, output_path=None):
         )
     )
     
-    # Lấy thông tin ngôn ngữ
     detected_lang = info.language
     print(f"Detected language: {detected_lang}")
     
-    # Chuyển segments sang list
     segment_list = []
     for seg in segments:
         segment_list.append({
@@ -144,7 +140,7 @@ def generate_subtitle(audio_path, output_path=None):
     to_vietnamese = GoogleTranslator(source='zh-CN', target='vi')
     print("  Vietnamese: zh-CN -> vi")
     
-    # Generate VTT content
+    # Generate VTT
     print("\nGenerating subtitles...")
     
     vtt_lines = [
@@ -168,7 +164,6 @@ def generate_subtitle(audio_path, output_path=None):
             if not text:
                 continue
             
-            # Translate to Chinese if needed
             if to_chinese:
                 try:
                     chinese_text = to_chinese.translate(text)
@@ -177,20 +172,17 @@ def generate_subtitle(audio_path, output_path=None):
             else:
                 chinese_text = text
             
-            # Generate Pinyin
             try:
                 py_list = pinyin(chinese_text, style=Style.TONE, heteronym=False)
                 pinyin_text = " ".join([item[0] for item in py_list])
             except:
                 pinyin_text = chinese_text
             
-            # Translate to Vietnamese
             try:
                 vietnamese_text = to_vietnamese.translate(chinese_text)
             except:
                 vietnamese_text = ""
             
-            # Add to VTT
             vtt_lines.append(f"{start} --> {end}")
             vtt_lines.append(chinese_text)
             vtt_lines.append(pinyin_text)
@@ -207,7 +199,7 @@ def generate_subtitle(audio_path, output_path=None):
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # Save VTT file
+    # Save VTT
     print(f"\n💾 Saving to: {output_file}")
     
     vtt_content = '\n'.join(vtt_lines)
@@ -220,7 +212,6 @@ def generate_subtitle(audio_path, output_path=None):
         print(f"❌ Error writing file: {e}")
         return None
     
-    # Kiểm tra file đã tạo
     if output_file.exists():
         print(f"✅ File exists! Size: {output_file.stat().st_size} bytes")
     else:
@@ -259,9 +250,8 @@ def generate_subtitle(audio_path, output_path=None):
     return str(output_file)
 
 
-# ===== HÀM MAIN =====
+# ===== MAIN =====
 def main():
-    """Main function - Process audio file"""
     parser = argparse.ArgumentParser(description='Generate subtitles from audio')
     parser.add_argument('--audio', help='Path to audio file (specific file)')
     parser.add_argument('--output', help='Path to output VTT file')
