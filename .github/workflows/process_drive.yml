@@ -15,11 +15,9 @@ permissions:
   packages: read
 
 jobs:
-  # ===== JOB 1: XỬ LÝ AUDIO TỪ PUSH/UPLOAD =====
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # 👈 CHỈ CHẠY KHI process_audio HOẶC push
     if: github.event.action == 'process_audio' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     
     steps:
@@ -79,10 +77,12 @@ jobs:
       env:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}  # 👈 THÊM DÒNG NÀY
       run: |
         echo "📤 Uploading subtitle to Gist..."
         echo "📁 Files in output:"
         ls -la output/
+        echo "🎯 Video ID: $VIDEO_ID"
         python scripts/push_to_gist.py
     
     - name: Cleanup
@@ -100,11 +100,9 @@ jobs:
         git add -A
         git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push) || echo "Push skipped"
 
-  # ===== JOB 2: XỬ LÝ AUDIO TỪ GOOGLE DRIVE =====
   process_drive:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # 👈 CHỈ CHẠY KHI process_drive_audio
     if: github.event.action == 'process_drive_audio'
     
     steps:
@@ -116,6 +114,7 @@ jobs:
         echo "✅ gdown installed"
     
     - name: Download from Google Drive
+      id: download
       env:
         DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
         VIDEO_ID: ${{ github.event.client_payload.video_id }}
@@ -183,11 +182,12 @@ jobs:
       env:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}  # 👈 THÊM DÒNG NÀY
       run: |
         echo "📤 Uploading subtitle to Gist..."
         echo "📁 Files in output:"
         ls -la output/
+        echo "🎯 Video ID: $VIDEO_ID"
         python scripts/push_to_gist.py
     
     - name: Notify completion
