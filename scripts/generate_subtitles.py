@@ -2,8 +2,6 @@
 """
 YouTube Subtitle Generator - Faster Whisper
 Tao phu de 3 dong: Chinese + Pinyin + Vietnamese
-Encoding: UTF-8 (khong BOM)
-CHI XU LY 1 FILE AUDIO MOI NHAT
 """
 
 import os
@@ -15,31 +13,42 @@ from pathlib import Path
 from datetime import datetime
 
 # ============================================================
-# XỬ LÝ HF_TOKEN - KIỂM TRA KỸ
+# KIỂM TRA TOKEN - IN RA CHI TIẾT
 # ============================================================
-print("🔍 Checking environment variables...")
-print(f"📁 HF_TOKEN in env: {'✅' if os.environ.get('HF_TOKEN') else '❌'}")
+print("=" * 50)
+print("ENVIRONMENT CHECK")
+print("=" * 50)
 
+# Kiểm tra token
 hf_token = os.environ.get('HF_TOKEN')
 if hf_token:
-    os.environ['HF_TOKEN'] = hf_token
-    print(f"✅ HF_TOKEN loaded (length: {len(hf_token)})")
-    print(f"✅ Token prefix: {hf_token[:10]}...")
+    print(f"✅ HF_TOKEN FOUND (length: {len(hf_token)})")
+    print(f"✅ Token starts with: {hf_token[:10]}...")
 else:
-    print("❌ HF_TOKEN not found!")
-    print("⚠️ This may cause slower downloads and rate limits")
+    print("❌ HF_TOKEN NOT FOUND in environment!")
+    print("⚠️ Trying to load from .env file...")
+    
+    # Thử đọc từ .env
+    try:
+        with open('.env', 'r') as f:
+            for line in f:
+                if line.startswith('HF_TOKEN='):
+                    token = line.strip().split('=', 1)[1]
+                    os.environ['HF_TOKEN'] = token
+                    print(f"✅ HF_TOKEN loaded from .env file (length: {len(token)})")
+                    break
+    except:
+        pass
 
-# Đọc token từ file .env (fallback)
-try:
-    with open('.env', 'r') as f:
-        for line in f:
-            if line.startswith('HF_TOKEN='):
-                token = line.strip().split('=', 1)[1]
-                os.environ['HF_TOKEN'] = token
-                print(f"✅ HF_TOKEN loaded from .env file")
-                break
-except:
-    pass
+# Kiểm tra lại sau khi load
+hf_token = os.environ.get('HF_TOKEN')
+if hf_token:
+    print(f"✅ HF_TOKEN is now set (length: {len(hf_token)})")
+else:
+    print("❌ HF_TOKEN is STILL NOT set!")
+    print("⚠️ Rate limits will apply - downloads will be slower")
+
+print("=" * 50)
 
 # Tắt cảnh báo
 import warnings
@@ -67,7 +76,6 @@ except ImportError:
 
 
 def format_time(seconds):
-    """Format seconds to VTT timestamp: HH:MM:SS.mmm"""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -76,13 +84,11 @@ def format_time(seconds):
 
 
 def generate_subtitle(audio_path, output_path=None):
-    """Generate VTT subtitle from audio file using faster-whisper"""
-    
     audio_file = Path(audio_path)
     video_id = audio_file.stem
     
-    print(f"🔍 Audio file: {audio_path}")
-    print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
+    print(f"🔍 Audio: {audio_path}")
+    print(f"🔍 Exists: {os.path.exists(audio_path)}")
     
     if output_path is None:
         output_dir = Path("output")
@@ -100,17 +106,13 @@ def generate_subtitle(audio_path, output_path=None):
         print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
-    # Load Faster-Whisper model
     print("Loading Faster-Whisper model (base)...")
-    print("⏳ This may take 10-30 seconds to download model...")
+    print("⏳ Downloading model...")
     
     model = WhisperModel("base", device="cpu", compute_type="int8")
     
     print("✅ Model loaded")
-    
-    # Transcribe
     print("Transcribing audio...")
-    print("⏳ This may take 3-15 minutes depending on audio length...")
     start_time = datetime.now()
     
     segments, info = model.transcribe(
@@ -126,7 +128,7 @@ def generate_subtitle(audio_path, output_path=None):
     )
     
     detected_lang = info.language
-    print(f"Detected language: {detected_lang}")
+    print(f"Language: {detected_lang}")
     
     segment_list = []
     for seg in segments:
@@ -144,7 +146,6 @@ def generate_subtitle(audio_path, output_path=None):
         print("No segments found!")
         return None
     
-    # Initialize translators
     print("Setting up translators...")
     
     to_chinese = None
@@ -153,12 +154,11 @@ def generate_subtitle(audio_path, output_path=None):
             to_chinese = GoogleTranslator(source=detected_lang, target='zh-CN')
             print(f"  Chinese: {detected_lang} -> zh-CN")
         except Exception as e:
-            print(f"⚠️ Cannot translate from {detected_lang} to Chinese: {e}")
+            print(f"⚠️ Cannot translate: {e}")
     
     to_vietnamese = GoogleTranslator(source='zh-CN', target='vi')
     print("  Vietnamese: zh-CN -> vi")
     
-    # Generate VTT
     print("\nGenerating subtitles...")
     
     vtt_lines = [
@@ -217,7 +217,6 @@ def generate_subtitle(audio_path, output_path=None):
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # Save VTT
     print(f"\n💾 Saving to: {output_file}")
     
     vtt_content = '\n'.join(vtt_lines)
@@ -236,7 +235,6 @@ def generate_subtitle(audio_path, output_path=None):
         print(f"❌ File does NOT exist after write!")
         return None
     
-    # Save summary
     summary = {
         'video_id': video_id,
         'language': detected_lang,
@@ -268,12 +266,10 @@ def generate_subtitle(audio_path, output_path=None):
     return str(output_file)
 
 
-# ===== MAIN =====
 def main():
     parser = argparse.ArgumentParser(description='Generate subtitles from audio')
-    parser.add_argument('--audio', help='Path to audio file (specific file)')
+    parser.add_argument('--audio', help='Path to audio file')
     parser.add_argument('--output', help='Path to output VTT file')
-    parser.add_argument('--latest', action='store_true', help='Process only the latest file')
     
     args = parser.parse_args()
     
