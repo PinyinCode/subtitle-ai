@@ -14,9 +14,6 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
-print(f"🔍 Current working directory: {os.getcwd()}")
-print(f"📁 Files in current directory: {os.listdir('.')}")
-
 try:
     import whisper
 except ImportError:
@@ -51,14 +48,10 @@ def generate_subtitle(audio_path, output_path=None):
     audio_file = Path(audio_path)
     video_id = audio_file.stem
     
-    # 👈 KIỂM TRA FILE AUDIO
-    print(f"🔍 Audio file: {audio_path}")
-    print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
-    
     # Nếu không chỉ định output, dùng thư mục mặc định
     if output_path is None:
-        output_dir = Path("/app/output")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
         output_file = output_dir / f"{video_id}.vtt"
     else:
         output_file = Path(output_path)
@@ -68,8 +61,7 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"Processing: {video_id}")
     print(f"Audio: {audio_path}")
     print(f"Output: {output_file}")
-    if audio_file.exists():
-        print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
+    print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
     # Load Whisper model
@@ -175,26 +167,13 @@ def generate_subtitle(audio_path, output_path=None):
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # Save VTT file
-    print(f"\n💾 Saving to: {output_file}")
+    # Save VTT file - DUNG UTF-8 KHONG BOM
+    print(f"\nSaving to: {output_file}")
     
     vtt_content = '\n'.join(vtt_lines)
     
-    # 👈 GHI FILE
-    try:
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(vtt_content)
-        print(f"✅ File written successfully!")
-    except Exception as e:
-        print(f"❌ Error writing file: {e}")
-        return None
-    
-    # 👈 KIỂM TRA FILE ĐÃ TẠO
-    if output_file.exists():
-        print(f"✅ File exists! Size: {output_file.stat().st_size} bytes")
-    else:
-        print(f"❌ File does NOT exist after write!")
-        return None
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(vtt_content)
     
     # Save summary
     summary = {
@@ -206,7 +185,7 @@ def generate_subtitle(audio_path, output_path=None):
         'duration': segments[-1]['end'] if segments else 0,
         'transcription_time': round(elapsed, 1),
         'output_file': str(output_file),
-        'output_size': output_file.stat().st_size if output_file.exists() else 0,
+        'output_size': output_file.stat().st_size,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -218,8 +197,7 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"COMPLETE!")
     print(f"{'='*50}")
     print(f"Output: {output_file}")
-    if output_file.exists():
-        print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
+    print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
     print(f"Success: {success_count}/{len(segments)}")
     print(f"Language: {detected_lang}")
     print(f"Duration: {summary['duration']:.1f}s")
