@@ -15,30 +15,22 @@ permissions:
   packages: read
 
 jobs:
-  # ===== JOB 1: DOWNLOAD FROM DRIVE (CHỈ CHẠY KHI CÓ DRIVE EVENT) =====
-  download_drive:
+  process:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.event.action == 'process_drive_audio'
-    
-    outputs:
-      video_id: ${{ steps.download.outputs.video_id }}
-      has_audio: ${{ steps.download.outputs.has_audio }}
+    timeout-minutes: 45
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
-    - name: Install gdown
-      run: |
-        pip install gdown
-        echo "✅ gdown installed"
-    
-    - name: Download from Google Drive
-      id: download
+    # 👈 NẾU LÀ DRIVE → TẢI FILE
+    - name: Download from Google Drive (if drive event)
+      if: github.event.action == 'process_drive_audio' || github.event.client_payload.drive_file_id
       env:
         DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
         VIDEO_ID: ${{ github.event.client_payload.video_id }}
       run: |
+        pip install gdown
         mkdir -p data/audio
         
         echo "📥 Downloading from Google Drive..."
@@ -49,28 +41,10 @@ jobs:
         
         if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
           echo "✅ Downloaded: ${VIDEO_ID}.m4a"
-          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
-          echo "has_audio=true" >> $GITHUB_OUTPUT
         else
           echo "❌ Download failed!"
-          echo "has_audio=false" >> $GITHUB_OUTPUT
           exit 1
         fi
-
-  # ===== JOB 2: XỬ LÝ AI (CHẠY SAU KHI DOWNLOAD HOẶC PUSH) =====
-  process_audio:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: download_drive  # 👈 CHỈ CHẠY SAU KHI download_drive HOÀN TẤT
-    if: |
-      always() &&
-      (github.event.action == 'process_audio' || 
-       github.event_name == 'push' || 
-       github.event_name == 'workflow_dispatch' ||
-       (github.event.action == 'process_drive_audio' && needs.download_drive.outputs.has_audio == 'true'))
-    
-    steps:
-    - uses: actions/checkout@v4
     
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
