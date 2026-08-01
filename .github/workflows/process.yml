@@ -23,6 +23,18 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
+    # 👈 KIỂM TRA TOKEN TRÊN RUNNER
+    - name: Debug - Check HF_TOKEN on runner
+      run: |
+        if [ -n "$HF_TOKEN" ]; then
+          echo "✅ HF_TOKEN is set on runner (length: ${#HF_TOKEN})"
+          echo "✅ Token prefix: ${HF_TOKEN:0:10}..."
+        else
+          echo "❌ HF_TOKEN is NOT set on runner!"
+        fi
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    
     # 👈 NẾU LÀ DRIVE → TẢI FILE
     - name: Download from Google Drive (if drive event)
       if: github.event.action == 'process_drive_audio' || github.event.client_payload.drive_file_id
@@ -60,6 +72,8 @@ jobs:
     
     - name: Process audio with AI
       id: process
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
         
@@ -70,13 +84,19 @@ jobs:
           
           mkdir -p output
           
+          echo "📁 Running Docker container with HF_TOKEN..."
+          
+          # 👈 TRUYỀN HF_TOKEN VÀO CONTAINER
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ghcr.io/pinyincode/subtitle-ai:latest \
-            python scripts/generate_subtitles.py \
-            --audio "/app/$AUDIO_FILE" \
-            --output "/app/output/${VIDEO_ID}.vtt"
+            bash -c "
+              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
+              echo '✅ Token prefix: '\${HF_TOKEN:0:10}
+              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt'
+            "
           
           echo "📁 Checking output files:"
           ls -la output/
