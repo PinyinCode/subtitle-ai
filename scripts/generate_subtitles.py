@@ -50,8 +50,8 @@ def generate_subtitle(audio_path, output_path=None):
     
     # Nếu không chỉ định output, dùng thư mục mặc định
     if output_path is None:
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
+        output_dir = Path("/app/output")  # 👈 SỬA: Dùng đường dẫn tuyệt đối
+        output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / f"{video_id}.vtt"
     else:
         output_file = Path(output_path)
@@ -172,8 +172,17 @@ def generate_subtitle(audio_path, output_path=None):
     
     vtt_content = '\n'.join(vtt_lines)
     
+    # 👈 SỬA: Ghi file với encoding UTF-8
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(vtt_content)
+    
+    # 👈 THÊM: Kiểm tra file đã được tạo
+    if output_file.exists():
+        print(f"✅ File created: {output_file}")
+        print(f"   Size: {output_file.stat().st_size} bytes")
+    else:
+        print(f"❌ File NOT created!")
+        return None
     
     # Save summary
     summary = {
@@ -185,7 +194,7 @@ def generate_subtitle(audio_path, output_path=None):
         'duration': segments[-1]['end'] if segments else 0,
         'transcription_time': round(elapsed, 1),
         'output_file': str(output_file),
-        'output_size': output_file.stat().st_size,
+        'output_size': output_file.stat().st_size if output_file.exists() else 0,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -197,7 +206,8 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"COMPLETE!")
     print(f"{'='*50}")
     print(f"Output: {output_file}")
-    print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
+    if output_file.exists():
+        print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
     print(f"Success: {success_count}/{len(segments)}")
     print(f"Language: {detected_lang}")
     print(f"Duration: {summary['duration']:.1f}s")
