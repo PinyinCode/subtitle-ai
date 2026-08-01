@@ -15,19 +15,22 @@ from pathlib import Path
 from datetime import datetime
 
 # ============================================================
-# XỬ LÝ HF_TOKEN - ĐẶT Ở ĐẦU FILE
+# KIỂM TRA VÀ IN RA TRẠNG THÁI HF_TOKEN
 # ============================================================
 hf_token = os.environ.get('HF_TOKEN')
 if hf_token:
     os.environ['HF_TOKEN'] = hf_token
     print(f"✅ HF_TOKEN loaded successfully (length: {len(hf_token)})")
+    print(f"✅ HF_TOKEN first 10 chars: {hf_token[:10]}...")
 else:
-    print("❌ HF_TOKEN not found in environment! Rate limits may apply.")
+    print("❌ HF_TOKEN not found in environment!")
+    print("⚠️ Rate limits may apply. Downloads will be slower.")
 
-# Tắt các cảnh báo không cần thiết
+# Tắt cảnh báo
 import warnings
 warnings.filterwarnings("ignore")
 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'  # 👈 TĂNG TỐC TẢI
 # ============================================================
 
 try:
@@ -87,9 +90,10 @@ def generate_subtitle(audio_path, output_path=None):
     print("Loading Faster-Whisper model (base)...")
     print("⏳ This may take 10-30 seconds to download model...")
     
+    # 👈 Dùng model base với int8
     model = WhisperModel("base", device="cpu", compute_type="int8")
     
-    print("Model loaded")
+    print("✅ Model loaded")
     
     # Transcribe
     print("Transcribing audio...")
@@ -134,8 +138,8 @@ def generate_subtitle(audio_path, output_path=None):
         try:
             to_chinese = GoogleTranslator(source=detected_lang, target='zh-CN')
             print(f"  Chinese: {detected_lang} -> zh-CN")
-        except:
-            print(f"⚠️ Cannot translate from {detected_lang} to Chinese")
+        except Exception as e:
+            print(f"⚠️ Cannot translate from {detected_lang} to Chinese: {e}")
     
     to_vietnamese = GoogleTranslator(source='zh-CN', target='vi')
     print("  Vietnamese: zh-CN -> vi")
