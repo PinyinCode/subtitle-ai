@@ -8,7 +8,7 @@ on:
   repository_dispatch:
     types:
       - process_audio
-      - process_drive_audio  # 👈 THÊM EVENT CHO GOOGLE DRIVE
+      - process_drive_audio
 
 permissions:
   contents: write
@@ -45,6 +45,8 @@ jobs:
           echo "🎬 Processing: $VIDEO_ID"
           echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
           
+          mkdir -p output
+          
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
@@ -63,9 +65,10 @@ jobs:
     - name: Upload subtitle to Gist
       if: steps.process.outputs.has_audio == 'true'
       env:
-        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        python scripts/push_to_gist.py 2>/dev/null || echo "Gist skipped"
+        python scripts/push_to_gist.py
     
     - name: Cleanup
       if: always()
@@ -109,7 +112,6 @@ jobs:
         echo "File ID: $DRIVE_FILE_ID"
         echo "Video ID: $VIDEO_ID"
         
-        # Tải từ Google Drive
         gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
         
         if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
@@ -160,7 +162,8 @@ jobs:
     - name: Upload subtitle to Gist
       if: steps.process.outputs.has_subtitle == 'true'
       env:
-        GH_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         VIDEO_ID: ${{ github.event.client_payload.video_id }}
       run: |
         echo "📤 Uploading subtitle to Gist..."
