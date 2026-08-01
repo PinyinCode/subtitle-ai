@@ -14,6 +14,9 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+print(f"🔍 Current working directory: {os.getcwd()}")
+print(f"📁 Files in current directory: {os.listdir('.')}")
+
 try:
     import whisper
 except ImportError:
@@ -48,10 +51,14 @@ def generate_subtitle(audio_path, output_path=None):
     audio_file = Path(audio_path)
     video_id = audio_file.stem
     
-    # Nếu không chỉ định output, dùng thư mục mặc định
+    # 👈 KIỂM TRA FILE AUDIO
+    print(f"🔍 Audio file: {audio_path}")
+    print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
+    
+    # 👈 SỬA: Dùng đường dẫn tuyệt đối trong Docker
     if output_path is None:
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
+        output_dir = Path("/app/output")
+        output_dir.mkdir(parents=True, exist_ok=True)
         output_file = output_dir / f"{video_id}.vtt"
     else:
         output_file = Path(output_path)
@@ -61,7 +68,8 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"Processing: {video_id}")
     print(f"Audio: {audio_path}")
     print(f"Output: {output_file}")
-    print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
+    if audio_file.exists():
+        print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
     # Load Whisper model
@@ -167,13 +175,25 @@ def generate_subtitle(audio_path, output_path=None):
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # Save VTT file - DUNG UTF-8 KHONG BOM
-    print(f"\nSaving to: {output_file}")
+    # Save VTT file
+    print(f"\n💾 Saving to: {output_file}")
     
     vtt_content = '\n'.join(vtt_lines)
     
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(vtt_content)
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(vtt_content)
+        print(f"✅ File written successfully!")
+    except Exception as e:
+        print(f"❌ Error writing file: {e}")
+        return None
+    
+    # 👈 KIỂM TRA FILE ĐÃ TẠO
+    if output_file.exists():
+        print(f"✅ File exists! Size: {output_file.stat().st_size} bytes")
+    else:
+        print(f"❌ File does NOT exist after write!")
+        return None
     
     # Save summary
     summary = {
@@ -185,7 +205,7 @@ def generate_subtitle(audio_path, output_path=None):
         'duration': segments[-1]['end'] if segments else 0,
         'transcription_time': round(elapsed, 1),
         'output_file': str(output_file),
-        'output_size': output_file.stat().st_size,
+        'output_size': output_file.stat().st_size if output_file.exists() else 0,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -197,7 +217,8 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"COMPLETE!")
     print(f"{'='*50}")
     print(f"Output: {output_file}")
-    print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
+    if output_file.exists():
+        print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
     print(f"Success: {success_count}/{len(segments)}")
     print(f"Language: {detected_lang}")
     print(f"Duration: {summary['duration']:.1f}s")
@@ -216,7 +237,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Nếu có chỉ định file cụ thể
     if args.audio:
         audio_path = args.audio
         if not os.path.exists(audio_path):
@@ -229,7 +249,6 @@ def main():
             print(f"\n✅ Done: {result}")
         return
     
-    # Nếu không chỉ định file, tìm file mới nhất
     print("\n🔍 Finding audio files...")
     audio_files = glob.glob("data/audio/*.m4a")
     
@@ -237,18 +256,15 @@ def main():
         print("❌ No audio files found in data/audio/")
         return
     
-    # Sắp xếp theo thời gian sửa đổi, lấy file mới nhất
     audio_files.sort(key=os.path.getmtime, reverse=True)
     latest_audio = audio_files[0]
     
     print(f"Found {len(audio_files)} file(s)")
     print(f"📌 Processing latest: {latest_audio}")
     
-    # Bỏ qua các file cũ
     if len(audio_files) > 1:
         print(f"   Skipping {len(audio_files)-1} old file(s)")
     
-    # Chỉ xử lý 1 file
     try:
         result = generate_subtitle(latest_audio)
         if result:
