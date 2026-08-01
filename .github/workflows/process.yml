@@ -67,32 +67,30 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    # 👈 CÁCH MỚI: Tạo file .env và xác minh
-    - name: Create .env file with HF_TOKEN
+    # 👈 CÀI ĐẶT TRỰC TIẾP TRÊN RUNNER
+    - name: Setup Python environment
       run: |
-        echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" > .env
-        echo "✅ .env file created with HF_TOKEN"
-        echo "File content:"
-        cat .env
+        python -m pip install --upgrade pip
+        pip install faster-whisper deep-translator pypinyin
+        echo "✅ All packages installed"
+    
+    - name: Debug - Check HF_TOKEN
+      run: |
+        if [ -n "$HF_TOKEN" ]; then
+          echo "✅ HF_TOKEN is set (length: ${#HF_TOKEN})"
+          echo "✅ Token: ${HF_TOKEN:0:10}..."
+        else
+          echo "❌ HF_TOKEN is NOT set!"
+        fi
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
     
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Pull AI Docker image
-      run: |
-        docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
-        echo "✅ Docker image ready"
-    
-    # 👈 CÁCH MỚI: Dùng bash -c và export token trực tiếp
+    # 👈 CHẠY SCRIPT TRỰC TIẾP (KHÔNG DÙNG DOCKER)
     - name: Process audio with AI
       id: process
       timeout-minutes: 30
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
         
@@ -103,19 +101,10 @@ jobs:
           
           mkdir -p output
           
-          echo "📁 Running Docker container with HF_TOKEN..."
-          
-          # 👈 CÁCH CHẮC CHẮN NHẤT: Export token và chạy script trong 1 lệnh
-          docker run --rm \
-            -v $(pwd):/app \
-            -w /app \
-            ghcr.io/pinyincode/subtitle-ai:latest \
-            bash -c "
-              export HF_TOKEN='${{ secrets.HF_TOKEN }}'
-              echo '✅ HF_TOKEN exported inside container'
-              echo 'Token length:' \${#HF_TOKEN}
-              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt'
-            "
+          echo "📁 Running script directly on runner..."
+          python scripts/generate_subtitles.py \
+            --audio "$AUDIO_FILE" \
+            --output "output/${VIDEO_ID}.vtt"
           
           echo "📁 Checking output files:"
           ls -la output/
@@ -154,7 +143,6 @@ jobs:
         rm -f output/*.vtt
         rm -f output/*_summary.json
         touch output/.gitkeep
-        rm -f .env
         echo "✅ Cleaned up"
         
         git config user.name "Actions"
