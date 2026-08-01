@@ -15,6 +15,7 @@ permissions:
   packages: read
 
 jobs:
+  # ===== JOB 1: DOWNLOAD FROM DRIVE =====
   download_drive:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -39,6 +40,11 @@ jobs:
         VIDEO_ID: ${{ github.event.client_payload.video_id }}
       run: |
         mkdir -p data/audio
+        
+        echo "📥 Downloading from Google Drive..."
+        echo "File ID: $DRIVE_FILE_ID"
+        echo "Video ID: $VIDEO_ID"
+        
         gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
         
         if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
@@ -51,6 +57,7 @@ jobs:
           exit 1
         fi
 
+  # ===== JOB 2: XỬ LÝ AI =====
   process_audio:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -106,7 +113,7 @@ jobs:
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
-            -e HF_TOKEN="$HF_TOKEN" \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ghcr.io/pinyincode/subtitle-ai:latest \
             python scripts/generate_subtitles.py \
             --audio "/app/$AUDIO_FILE" \
