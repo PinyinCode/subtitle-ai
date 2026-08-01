@@ -1,49 +1,39 @@
-name: Build and Push Docker Image
+FROM python:3.10-slim
 
-on:
-  push:
-    paths:
-      - Dockerfile
-      - scripts/**/*
-  workflow_dispatch:
+# Cài FFmpeg + Git + các tool cần thiết
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ffmpeg \
+    git \
+    ca-certificates \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-permissions:
-  contents: read
-  packages: write
+# 👈 TẮT CẢNH BÁO BẰNG CÁCH SET ENV TRONG IMAGE
+ENV HF_HUB_DISABLE_SYMLINKS_WARNING=1
+ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
+ENV PYTHONWARNINGS=ignore
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Extract metadata (tags, labels) for Docker
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ghcr.io/${{ github.repository }}
-        tags: |
-          type=raw,value=latest
-          type=sha,prefix=sha-
-          type=ref,event=branch
-          type=ref,event=pr
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: |
-          ghcr.io/${{ github.repository }}:latest
-          ghcr.io/${{ github.repository }}:${{ github.sha }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+# 👈 TẠO TOKEN DUMMY ĐỂ TRÁNH CẢNH BÁO
+ENV HF_TOKEN=dummy_token_for_build
+
+# ✅ Cài Faster-Whisper
+RUN pip install --no-cache-dir \
+    faster-whisper \
+    deep-translator \
+    pypinyin \
+    requests \
+    PyGithub
+
+# ✅ Pre-download Faster-Whisper model (dùng dummy token)
+RUN python -c "import os; os.environ['HF_TOKEN']='dummy'; from faster_whisper import WhisperModel; WhisperModel('medium', device='cpu', compute_type='int8')"
+
+# Thư mục làm việc
+WORKDIR /app
+
+# Verify cài đặt
+RUN python -c "from faster_whisper import WhisperModel; print('Faster-Whisper OK')" && \
+    ffmpeg -version | head -1 && \
+    git --version
