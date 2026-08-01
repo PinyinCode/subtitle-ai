@@ -18,7 +18,7 @@ jobs:
   # ===== JOB 1: DOWNLOAD FROM GOOGLE DRIVE =====
   download_drive:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     if: github.event.action == 'process_drive_audio'
     
     outputs:
@@ -61,7 +61,7 @@ jobs:
   # ===== JOB 2: PROCESS AUDIO WITH AI =====
   process_audio:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: download_drive
     if: |
       always() &&
@@ -73,6 +73,18 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+    
+    # 👈 KIỂM TRA TOKEN TRƯỚC KHI CHẠY
+    - name: Debug - Check HF_TOKEN
+      run: |
+        if [ -n "$HF_TOKEN" ]; then
+          echo "✅ HF_TOKEN is set in runner (length: ${#HF_TOKEN})"
+          echo "✅ Token starts with: ${HF_TOKEN:0:10}..."
+        else
+          echo "❌ HF_TOKEN is NOT set in runner!"
+        fi
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
     
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
@@ -86,13 +98,13 @@ jobs:
         docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
         echo "✅ Docker image ready"
     
-    # 👈 CÁCH CHẮC CHẮN NHẤT: TRUYỀN TRỰC TIẾP VÀO LỆNH
     - name: Process audio with AI
       id: process
-      env:
-        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      timeout-minutes: 30
       run: |
+        echo "📁 Step 1: Finding audio file..."
         AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
+        echo "📁 Audio file: $AUDIO_FILE"
         
         if [ -n "$AUDIO_FILE" ]; then
           VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
@@ -101,14 +113,32 @@ jobs:
           
           mkdir -p output
           
-          # 👈 QUAN TRỌNG: Dùng bash -c để export token trước khi chạy
+          echo "📁 Step 2: Running Docker container..."
+          echo "⏳ This may take 10-20 minutes for long videos..."
+          
+          START_TIME=$(date +%s)
+          
+          # 👈 TRUYỀN HF_TOKEN CHẮC CHẮN
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ghcr.io/pinyincode/subtitle-ai:latest \
-            bash -c "export HF_TOKEN='${{ secrets.HF_TOKEN }}' && python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt'"
+            bash -c "export HF_TOKEN='${{ secrets.HF_TOKEN }}' && python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt' 2>&1"
           
-          echo "📁 Checking output files:"
+          EXIT_CODE=$?
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          
+          echo "📁 Docker execution time: $((DURATION / 60)) minutes $((DURATION % 60)) seconds"
+          echo "📁 Docker exit code: $EXIT_CODE"
+          
+          if [ $EXIT_CODE -eq 124 ]; then
+            echo "❌ Docker container timed out after 30 minutes!"
+            exit 1
+          fi
+          
+          echo "📁 Step 3: Checking output files..."
           ls -la output/
           
           if [ -f "output/${VIDEO_ID}.vtt" ]; then
