@@ -24,6 +24,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Debug - Check files
+      run: |
+        echo "📁 Current directory: $(pwd)"
+        echo "📁 Files:"
+        ls -la
+        echo "📁 Scripts folder:"
+        ls -la scripts/ || echo "No scripts folder"
+    
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
       with:
@@ -52,9 +60,10 @@ jobs:
           docker run --rm \
             -v $(pwd)/data:/app/data \
             -v $(pwd)/output:/app/output \
+            -v $(pwd)/scripts:/app/scripts \
             -w /app \
             ghcr.io/pinyincode/subtitle-ai:latest \
-            python scripts/generate_subtitles.py \
+            python /app/scripts/generate_subtitles.py \
             --audio "/app/data/audio/${VIDEO_ID}.m4a" \
             --output "/app/output/${VIDEO_ID}.vtt"
           
@@ -111,6 +120,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Debug - Check files
+      run: |
+        echo "📁 Current directory: $(pwd)"
+        echo "📁 Files:"
+        ls -la
+        echo "📁 Scripts folder:"
+        ls -la scripts/ || echo "No scripts folder"
+    
     - name: Install gdown
       run: |
         pip install gdown
@@ -163,9 +180,10 @@ jobs:
         docker run --rm \
           -v $(pwd)/data:/app/data \
           -v $(pwd)/output:/app/output \
+          -v $(pwd)/scripts:/app/scripts \
           -w /app \
           ghcr.io/pinyincode/subtitle-ai:latest \
-          python scripts/generate_subtitles.py \
+          python /app/scripts/generate_subtitles.py \
           --audio "/app/data/audio/${VIDEO_ID}.m4a" \
           --output "/app/output/${VIDEO_ID}.vtt"
         
