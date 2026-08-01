@@ -15,23 +15,31 @@ permissions:
   packages: read
 
 jobs:
-  # ===== JOB DUY NHẤT: XỬ LÝ AUDIO (TỪ PUSH HOẶC DRIVE) =====
-  process:
+  # ===== JOB 1: DOWNLOAD FROM DRIVE (CHỈ CHẠY KHI CÓ DRIVE EVENT) =====
+  download_drive:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    if: github.event.action == 'process_drive_audio'
+    
+    outputs:
+      video_id: ${{ steps.download.outputs.video_id }}
+      has_audio: ${{ steps.download.outputs.has_audio }}
     
     steps:
     - uses: actions/checkout@v4
     
-    # 👈 NẾU LÀ GOOGLE DRIVE → TẢI FILE VỀ
-    - name: Download from Google Drive (if drive event)
-      if: github.event.action == 'process_drive_audio'
+    - name: Install gdown
       run: |
         pip install gdown
+        echo "✅ gdown installed"
+    
+    - name: Download from Google Drive
+      id: download
+      env:
+        DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+      run: |
         mkdir -p data/audio
-        
-        DRIVE_FILE_ID="${{ github.event.client_payload.drive_file_id }}"
-        VIDEO_ID="${{ github.event.client_payload.video_id }}"
         
         echo "📥 Downloading from Google Drive..."
         echo "File ID: $DRIVE_FILE_ID"
@@ -41,12 +49,29 @@ jobs:
         
         if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
           echo "✅ Downloaded: ${VIDEO_ID}.m4a"
+          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+          echo "has_audio=true" >> $GITHUB_OUTPUT
         else
           echo "❌ Download failed!"
+          echo "has_audio=false" >> $GITHUB_OUTPUT
           exit 1
         fi
+
+  # ===== JOB 2: XỬ LÝ AI (CHẠY SAU KHI DOWNLOAD HOẶC PUSH) =====
+  process_audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: download_drive  # 👈 CHỈ CHẠY SAU KHI download_drive HOÀN TẤT
+    if: |
+      always() &&
+      (github.event.action == 'process_audio' || 
+       github.event_name == 'push' || 
+       github.event_name == 'workflow_dispatch' ||
+       (github.event.action == 'process_drive_audio' && needs.download_drive.outputs.has_audio == 'true'))
     
-    # 👈 XỬ LÝ AI (CHO CẢ 2 TRƯỜNG HỢP)
+    steps:
+    - uses: actions/checkout@v4
+    
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v3
       with:
@@ -95,7 +120,6 @@ jobs:
           echo "has_audio=false" >> $GITHUB_OUTPUT
         fi
     
-    # 👈 UPLOAD LÊN GIST
     - name: Upload subtitle to Gist
       if: steps.process.outputs.has_audio == 'true'
       env:
@@ -109,7 +133,6 @@ jobs:
         echo "🎯 Video ID: $VIDEO_ID"
         python scripts/push_to_gist.py
     
-    # 👈 DỌN DẸP
     - name: Cleanup
       if: always()
       run: |
