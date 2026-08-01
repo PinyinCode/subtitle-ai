@@ -28,22 +28,53 @@ for f in vtt_files:
     
     print(f'Pushing Gist for: {video_id}')
     
-    # Tạo Gist mới
-    response = requests.post(
-        'https://api.github.com/gists',
-        headers=headers,
-        json={
-            "description": f"YouTube Subtitle - {video_id}",
-            "public": True,
-            "files": {
-                f"{video_id}.vtt": {"content": content}
+    # Kiểm tra Gist đã tồn tại chưa
+    gist_exists = False
+    gist_id = None
+    
+    try:
+        # Lấy danh sách Gist của user
+        resp = requests.get('https://api.github.com/gists', headers=headers, params={'per_page': 100})
+        if resp.status_code == 200:
+            for gist in resp.json():
+                if gist.get('description', '').endswith(video_id):
+                    gist_exists = True
+                    gist_id = gist['id']
+                    break
+    except:
+        pass
+    
+    if gist_exists and gist_id:
+        # Update Gist cũ
+        print(f'Updating existing Gist: {gist_id}')
+        response = requests.patch(
+            f'https://api.github.com/gists/{gist_id}',
+            headers=headers,
+            json={
+                "description": f"YouTube Subtitle - {video_id}",
+                "files": {
+                    f"{video_id}.vtt": {"content": content}
+                }
             }
-        }
-    )
+        )
+    else:
+        # Tạo Gist mới
+        print(f'Creating new Gist for: {video_id}')
+        response = requests.post(
+            'https://api.github.com/gists',
+            headers=headers,
+            json={
+                "description": f"YouTube Subtitle - {video_id}",
+                "public": False,
+                "files": {
+                    f"{video_id}.vtt": {"content": content}
+                }
+            }
+        )
     
     if response.status_code in [200, 201]:
         data = response.json()
-        print(f'✅ Gist created: {data["html_url"]}')
+        print(f'✅ Gist saved: {data["html_url"]}')
     else:
         print(f'❌ Error {response.status_code}: {response.text[:200]}')
 
