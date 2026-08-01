@@ -8,23 +8,25 @@ CHI XU LY 1 FILE AUDIO MOI NHAT
 
 import os
 import sys
-import json
-import glob
-import argparse
-from pathlib import Path
-from datetime import datetime
 
-# 👈 SET HF_TOKEN TỪ ENV
+# ============================================================
+# 👈 PHẦN XỬ LÝ HF_TOKEN - ĐẶT Ở ĐẦU FILE
+# ============================================================
 hf_token = os.environ.get('HF_TOKEN')
 if hf_token:
+    # Ép buộc thiết lập token cho huggingface_hub
     os.environ['HF_TOKEN'] = hf_token
-    print("✅ HF_TOKEN loaded from environment")
+    print(f"✅ HF_TOKEN loaded successfully (length: {len(hf_token)})")
+else:
+    print("❌ HF_TOKEN not found in environment! Rate limits may apply.")
+    print("⚠️ Please set HF_TOKEN secret in GitHub Actions.")
 
-# 👈 TẮT CẢNH BÁO
+# Tắt các cảnh báo không cần thiết
 import warnings
 warnings.filterwarnings("ignore")
+os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+# ============================================================
 
-# 👈 CÀI FASTER-WHISPER
 try:
     from faster_whisper import WhisperModel
 except ImportError:
