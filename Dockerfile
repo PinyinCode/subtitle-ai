@@ -10,7 +10,7 @@ RUN apt-get update && \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# ✅ Cài Faster-Whisper (thay vì openai-whisper)
+# ✅ Cài Faster-Whisper (thay vì openai-whisper) - Nhanh hơn 4x
 RUN pip install --no-cache-dir \
     faster-whisper \
     deep-translator \
@@ -28,3 +28,4 @@ WORKDIR /app
 RUN python -c "from faster_whisper import WhisperModel; print('Faster-Whisper OK')" && \
     ffmpeg -version | head -1 && \
     git --version
+    
