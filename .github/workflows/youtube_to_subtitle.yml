@@ -1,0 +1,192 @@
+name: YouTube to Subtitle (Auto)
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: '📌 YouTube URL'
+        required: true
+        type: string
+  repository_dispatch:
+    types:
+      - youtube_to_subtitle
+
+permissions:
+  contents: write
+  packages: read
+  actions: write
+
+jobs:
+  # ===== JOB 1: TẢI TỪ YOUTUBE =====
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    outputs:
+      video_id: ${{ steps.download.outputs.video_id }}
+      audio_file: ${{ steps.download.outputs.audio_file }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        pip install yt-dlp
+        echo "✅ Dependencies installed"
+    
+    - name: Download audio from YouTube
+      id: download
+      env:
+        YOUTUBE_URL: ${{ github.event.inputs.youtube_url || github.event.client_payload.youtube_url }}
+      run: |
+        URL="${{ github.event.inputs.youtube_url || github.event.client_payload.youtube_url }}"
+        
+        if [ -z "$URL" ]; then
+          echo "❌ No YouTube URL provided!"
+          exit 1
+        fi
+        
+        echo "🎬 Downloading audio from YouTube..."
+        echo "🔗 URL: $URL"
+        
+        # Tải audio
+        yt-dlp -f bestaudio \
+          --extract-audio \
+          --audio-format m4a \
+          --audio-quality 0 \
+          --no-playlist \
+          -o "audio.%(ext)s" \
+          "$URL"
+        
+        # Lấy video ID
+        VIDEO_ID=$(yt-dlp --get-id "$URL" 2>/dev/null || echo "unknown")
+        echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+        
+        # Đổi tên file
+        if [ -f "audio.m4a" ]; then
+          mv audio.m4a "${VIDEO_ID}.m4a"
+          echo "audio_file=${VIDEO_ID}.m4a" >> $GITHUB_OUTPUT
+          echo "✅ Downloaded: ${VIDEO_ID}.m4a"
+          echo "📁 File size: $(du -h ${VIDEO_ID}.m4a | cut -f1)"
+        else
+          echo "❌ Audio file not found!"
+          exit 1
+        fi
+    
+    - name: Upload audio to GitHub Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: audio
+        path: ${{ steps.download.outputs.audio_file }}
+        retention-days: 1
+
+  # ===== JOB 2: XỬ LÝ PHỤ ĐỀ =====
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: download
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download audio artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: audio
+        path: data/audio/
+    
+    - name: List downloaded files
+      run: |
+        echo "📁 Files in data/audio:"
+        ls -la data/audio/
+    
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Pull AI Docker image
+      run: |
+        docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
+        echo "✅ Docker image ready"
+    
+    - name: Process audio with AI
+      id: process
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
+        
+        if [ -n "$AUDIO_FILE" ]; then
+          VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
+          echo "🎬 Processing: $VIDEO_ID"
+          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+          
+          mkdir -p output
+          
+          echo "📁 Running Docker container..."
+          docker run --rm \
+            -v $(pwd):/app \
+            -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            ghcr.io/pinyincode/subtitle-ai:latest \
+            bash -c "export HF_TOKEN='${{ secrets.HF_TOKEN }}' && python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt'"
+          
+          echo "📁 Checking output files:"
+          ls -la output/
+          
+          if [ -f "output/${VIDEO_ID}.vtt" ]; then
+            echo "✅ Processing completed"
+            echo "has_audio=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ VTT file NOT created!"
+            echo "has_audio=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        else
+          echo "ℹ️ No audio file found"
+          echo "has_audio=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Upload subtitle to Gist
+      if: steps.process.outputs.has_audio == 'true'
+      env:
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}
+      run: |
+        echo "📤 Uploading subtitle to Gist..."
+        echo "📁 Files in output:"
+        ls -la output/
+        echo "🎯 Video ID: $VIDEO_ID"
+        python scripts/push_to_gist.py
+    
+    - name: Upload subtitle as artifact
+      if: steps.process.outputs.has_audio == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: subtitle
+        path: output/*.vtt
+    
+    - name: Notify completion
+      if: steps.process.outputs.has_audio == 'true'
+      run: |
+        VIDEO_ID=${{ steps.process.outputs.video_id }}
+        echo "🎉🎉🎉 Subtitle for ${VIDEO_ID} is ready!"
+        echo "📁 Check your Gist: ${VIDEO_ID}.vtt"
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f data/audio/*.m4a
+        touch data/audio/.gitkeep
+        rm -f output/*.vtt
+        rm -f output/*_summary.json
+        touch output/.gitkeep
+        echo "✅ Cleaned up"
