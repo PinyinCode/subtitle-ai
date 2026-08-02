@@ -1,0 +1,143 @@
+name: AI Subtitle Generator
+
+on:
+  push:
+    paths:
+      - data/audio/*.m4a
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+      - process_audio
+      - process_drive_audio
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    # 👈 KIỂM TRA TOKEN TRÊN RUNNER
+    - name: Debug - Check HF_TOKEN on runner
+      run: |
+        if [ -n "$HF_TOKEN" ]; then
+          echo "✅ HF_TOKEN is set on runner (length: ${#HF_TOKEN})"
+          echo "✅ Token prefix: ${HF_TOKEN:0:10}..."
+        else
+          echo "❌ HF_TOKEN is NOT set on runner!"
+        fi
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    
+    # 👈 NẾU LÀ DRIVE → TẢI FILE
+    - name: Download from Google Drive (if drive event)
+      if: github.event.action == 'process_drive_audio' || github.event.client_payload.drive_file_id
+      env:
+        DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+      run: |
+        pip install gdown
+        mkdir -p data/audio
+        
+        echo "📥 Downloading from Google Drive..."
+        echo "File ID: $DRIVE_FILE_ID"
+        echo "Video ID: $VIDEO_ID"
+        
+        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
+        
+        if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
+          echo "✅ Downloaded: ${VIDEO_ID}.m4a"
+        else
+          echo "❌ Download failed!"
+          exit 1
+        fi
+    
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Pull AI Docker image
+      run: |
+        docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
+        echo "✅ Docker image ready"
+    
+    - name: Process audio with AI
+      id: process
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
+        
+        if [ -n "$AUDIO_FILE" ]; then
+          VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
+          echo "🎬 Processing: $VIDEO_ID"
+          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+          
+          mkdir -p output
+          
+          echo "📁 Running Docker container with HF_TOKEN..."
+          
+          # 👈 TRUYỀN HF_TOKEN VÀO CONTAINER
+          docker run --rm \
+            -v $(pwd):/app \
+            -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            ghcr.io/pinyincode/subtitle-ai:latest \
+            bash -c "
+              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
+              echo '✅ Token prefix: '\${HF_TOKEN:0:10}
+              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt'
+            "
+          
+          echo "📁 Checking output files:"
+          ls -la output/
+          
+          if [ -f "output/${VIDEO_ID}.vtt" ]; then
+            echo "✅ Processing completed"
+            echo "has_audio=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ VTT file NOT created!"
+            echo "has_audio=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+        else
+          echo "ℹ️ No audio file found"
+          echo "has_audio=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Upload subtitle to Gist
+      if: steps.process.outputs.has_audio == 'true'
+      env:
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}
+      run: |
+        echo "📤 Uploading subtitle to Gist..."
+        echo "📁 Files in output:"
+        ls -la output/
+        echo "🎯 Video ID: $VIDEO_ID"
+        python scripts/push_to_gist.py
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f data/audio/*.m4a
+        touch data/audio/.gitkeep
+        rm -f output/*.vtt
+        rm -f output/*_summary.json
+        touch output/.gitkeep
+        echo "✅ Cleaned up"
+        
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add -A
+        git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push) || echo "Push skipped"
