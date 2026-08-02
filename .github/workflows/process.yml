@@ -114,7 +114,9 @@ jobs:
           echo "has_audio=false" >> $GITHUB_OUTPUT
         fi
     
+    # ===== UPLOAD SUBTITLE TO GIST =====
     - name: Upload subtitle to Gist
+      id: upload_gist  # 🆕 THÊM ID ĐỂ KIỂM TRA
       if: steps.process.outputs.has_audio == 'true'
       env:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
@@ -125,7 +127,60 @@ jobs:
         echo "📁 Files in output:"
         ls -la output/
         echo "🎯 Video ID: $VIDEO_ID"
+        
+        # Chạy script upload
         python scripts/push_to_gist.py
+        
+        # 🆕 KIỂM TRA KẾT QUẢ UPLOAD
+        if [ $? -eq 0 ]; then
+          echo "✅ Upload to Gist successful!"
+          echo "gist_uploaded=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Upload to Gist FAILED!"
+          echo "gist_uploaded=false" >> $GITHUB_OUTPUT
+          exit 1  # Dừng workflow nếu upload thất bại
+        fi
+    
+    # ===== 🆕 XÓA FILE TRÊN GOOGLE DRIVE =====
+    # CHỈ XÓA KHI: Upload Gist thành công VÀ là sự kiện từ Drive
+    - name: Delete file from Google Drive
+      if: |
+        steps.upload_gist.outputs.gist_uploaded == 'true' && 
+        github.event.action == 'process_drive_audio'
+      env:
+        DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
+        DRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.DRIVE_SERVICE_ACCOUNT_KEY }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}
+      run: |
+        echo "🗑️ Deleting file from Google Drive..."
+        echo "📹 Video ID: $VIDEO_ID"
+        echo "📎 File ID: $DRIVE_FILE_ID"
+        
+        # Kiểm tra secret có tồn tại không
+        if [ -z "$DRIVE_SERVICE_ACCOUNT_KEY" ]; then
+          echo "⚠️ DRIVE_SERVICE_ACCOUNT_KEY not configured, skipping delete"
+          exit 0
+        fi
+        
+        # Tạo file key từ secret
+        echo "$DRIVE_SERVICE_ACCOUNT_KEY" > /tmp/service-account-key.json
+        
+        # Cài đặt gdown
+        pip install gdown
+        
+        # Xóa file sử dụng service account
+        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" \
+          --delete \
+          --key-file /tmp/service-account-key.json
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ File deleted successfully from Google Drive!"
+        else
+          echo "⚠️ Failed to delete file, but continuing..."
+        fi
+        
+        # Dọn dẹp key
+        rm -f /tmp/service-account-key.json
     
     - name: Cleanup
       if: always()
