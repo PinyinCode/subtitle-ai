@@ -1,0 +1,45 @@
+name: Check Processing Status
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: 'Video ID to check'
+        required: true
+        type: string
+  repository_dispatch:
+    types:
+      - check_status
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      message: ${{ steps.check.outputs.message }}
+      timestamp: ${{ steps.check.outputs.timestamp }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Check processing status
+      id: check
+      env:
+        VIDEO_ID: ${{ github.event.inputs.video_id || github.event.client_payload.video_id }}
+      run: |
+        STATUS_FILE=".processing/${VIDEO_ID}.lock"
+        mkdir -p .processing
+        
+        if [ -f "$STATUS_FILE" ]; then
+          TIMESTAMP=$(cat "$STATUS_FILE")
+          echo "status=processing" >> $GITHUB_OUTPUT
+          echo "message=Video ${VIDEO_ID} đang được xử lý từ ${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+        else
+          echo "status=idle" >> $GITHUB_OUTPUT
+          echo "message=Video ${VIDEO_ID} sẵn sàng xử lý" >> $GITHUB_OUTPUT
+          echo "timestamp=" >> $GITHUB_OUTPUT
+        fi
