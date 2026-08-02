@@ -116,7 +116,7 @@ jobs:
     
     # ===== UPLOAD SUBTITLE TO GIST =====
     - name: Upload subtitle to Gist
-      id: upload_gist  # 🆕 THÊM ID ĐỂ KIỂM TRA
+      id: upload_gist
       if: steps.process.outputs.has_audio == 'true'
       env:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
@@ -131,18 +131,17 @@ jobs:
         # Chạy script upload
         python scripts/push_to_gist.py
         
-        # 🆕 KIỂM TRA KẾT QUẢ UPLOAD
+        # Kiểm tra kết quả upload
         if [ $? -eq 0 ]; then
           echo "✅ Upload to Gist successful!"
           echo "gist_uploaded=true" >> $GITHUB_OUTPUT
         else
           echo "❌ Upload to Gist FAILED!"
           echo "gist_uploaded=false" >> $GITHUB_OUTPUT
-          exit 1  # Dừng workflow nếu upload thất bại
+          exit 1
         fi
     
-    # ===== 🆕 XÓA FILE TRÊN GOOGLE DRIVE =====
-    # CHỈ XÓA KHI: Upload Gist thành công VÀ là sự kiện từ Drive
+    # ===== 🆕 XÓA FILE TRÊN GOOGLE DRIVE (DÙNG FILE SCRIPT CÓ SẴN) =====
     - name: Delete file from Google Drive
       if: |
         steps.upload_gist.outputs.gist_uploaded == 'true' && 
@@ -162,25 +161,17 @@ jobs:
           exit 0
         fi
         
-        # Tạo file key từ secret
-        echo "$DRIVE_SERVICE_ACCOUNT_KEY" > /tmp/service-account-key.json
+        # Cài đặt thư viện Google API
+        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
         
-        # Cài đặt gdown
-        pip install gdown
-        
-        # Xóa file sử dụng service account
-        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" \
-          --delete \
-          --key-file /tmp/service-account-key.json
+        # Chạy script xóa (đã có trong scripts/delete_from_drive.py)
+        python scripts/delete_from_drive.py
         
         if [ $? -eq 0 ]; then
           echo "✅ File deleted successfully from Google Drive!"
         else
           echo "⚠️ Failed to delete file, but continuing..."
         fi
-        
-        # Dọn dẹp key
-        rm -f /tmp/service-account-key.json
     
     - name: Cleanup
       if: always()
