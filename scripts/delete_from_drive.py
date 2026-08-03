@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Xóa file trên Google Drive sử dụng Service Account
+Xóa file trên Google Drive - SỬA SCOPE
 """
 
 import os
@@ -11,34 +11,25 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 def delete_file(file_id, service_account_key):
-    """
-    Xóa file trên Google Drive
-    
-    Args:
-        file_id: ID của file cần xóa
-        service_account_key: JSON key của service account
-    
-    Returns:
-        bool: True nếu xóa thành công
-    """
     try:
-        # Parse service account key
         if isinstance(service_account_key, str):
             service_account_info = json.loads(service_account_key)
         else:
             service_account_info = service_account_key
         
-        # Tạo credentials
+        # ✅ SỬA SCOPE
         creds = Credentials.from_service_account_info(
             service_account_info,
-            scopes=['https://www.googleapis.com/auth/drive.file']
+            scopes=['https://www.googleapis.com/auth/drive']  # ĐÃ SỬA
         )
         
-        # Khởi tạo Drive service
         service = build('drive', 'v3', credentials=creds)
         
-        # Gọi API delete (xóa vĩnh viễn)
-        service.files().delete(fileId=file_id).execute()
+        # ✅ XÓA THẬT
+        service.files().delete(
+            fileId=file_id,
+            supportsAllDrives=True
+        ).execute()
         
         print(f"✅ Successfully deleted file: {file_id}")
         return True
@@ -54,7 +45,6 @@ def delete_file(file_id, service_account_key):
         return False
 
 def main():
-    """Main function"""
     file_id = os.getenv('DRIVE_FILE_ID')
     service_account_key = os.getenv('DRIVE_SERVICE_ACCOUNT_KEY')
     
@@ -64,12 +54,10 @@ def main():
     
     if not service_account_key:
         print("❌ DRIVE_SERVICE_ACCOUNT_KEY environment variable is required")
-        print("💡 Add it to GitHub Secrets: Settings → Secrets → Actions")
         sys.exit(1)
     
     print(f"🗑️ Deleting file: {file_id}")
     success = delete_file(file_id, service_account_key)
-    
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
