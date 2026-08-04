@@ -5,6 +5,7 @@ import sys
 import json
 import glob
 import requests
+from datetime import datetime
 
 print("📤 Starting Gist upload...")
 
@@ -15,8 +16,9 @@ if not token:
     print('❌ No token found, skipping Gist push')
     sys.exit(0)
 
-# 👈 LẤY VIDEO_ID TỪ ENV
-video_id = os.environ.get('VIDEO_ID')
+# 👈 LẤY VIDEO_ID VÀ YOUTUBE_LINK TỪ ENV
+video_id = os.environ.get('VIDEO_ID', '')
+youtube_link = os.environ.get('YOUTUBE_LINK', '')
 
 headers = {
     "Authorization": f"token {token}",
@@ -34,20 +36,48 @@ if not vtt_files:
     sys.exit(0)
 
 for f in vtt_files:
-    # 👈 Ưu tiên dùng VIDEO_ID từ ENV
-    file_video_id = os.path.basename(f).replace('.vtt', '')
-    vid = video_id or file_video_id
+    # 👈 Lấy tên gốc (không extension)
+    base_name = os.path.basename(f).replace('.vtt', '')
+    vid = video_id or base_name
     
     print(f'\n📤 Processing: {vid}')
     
-    # Đọc nội dung file
+    # Đọc nội dung file VTT
     try:
         with open(f, 'r', encoding='utf-8') as fh:
-            content = fh.read()
-        print(f"✅ Read {len(content)} characters")
+            vtt_content = fh.read()
+        print(f"✅ Read VTT: {len(vtt_content)} characters")
     except Exception as e:
-        print(f"❌ Error reading file: {e}")
+        print(f"❌ Error reading VTT: {e}")
         continue
+    
+    # 👈 Tìm file info.txt tương ứng
+    info_file = f"output/{vid}.info.txt"
+    info_content = None
+    if os.path.exists(info_file):
+        try:
+            with open(info_file, 'r', encoding='utf-8') as fh:
+                info_content = fh.read()
+            print(f"✅ Found info file: {info_file}")
+        except Exception as e:
+            print(f"⚠️ Cannot read info file: {e}")
+    
+    # 👈 Nếu không có file info, tạo từ env
+    if not info_content and youtube_link:
+        info_content = f"""Video ID: {vid}
+YouTube Link: {youtube_link}
+Generated: {datetime.now().isoformat()}
+"""
+        print(f"ℹ️ Generated info from env")
+    
+    # 👈 Tạo metadata JSON (tuỳ chọn)
+    metadata = {
+        "video_id": vid,
+        "youtube_link": youtube_link,
+        "generated_at": datetime.now().isoformat(),
+        "vtt_file": f"{vid}.vtt"
+    }
+    metadata_content = json.dumps(metadata, indent=2, ensure_ascii=False)
     
     # Kiểm tra Gist đã tồn tại
     gist_exists = False
@@ -57,23 +87,65 @@ for f in vtt_files:
         resp = requests.get('https://api.github.com/gists', headers=headers, params={'per_page': 100})
         if resp.status_code == 200:
             for gist in resp.json():
+                # Kiểm tra description chứa vid
                 if gist.get('description', '').endswith(vid):
                     gist_exists = True
                     gist_id = gist['id']
                     print(f"✅ Found existing Gist: {gist_id}")
                     break
+                # Hoặc kiểm tra file trong gist
+                files = gist.get('files', {})
+                if f"{vid}.vtt" in files:
+                    gist_exists = True
+                    gist_id = gist['id']
+                    print(f"✅ Found existing Gist (by file): {gist_id}")
+                    break
     except Exception as e:
         print(f"⚠️ Error checking Gists: {e}")
     
-    # Tạo hoặc update Gist
-    data = {
-        "description": f"Pinyin AI Subtitle - {vid}",
-        "public": False,
-        "files": {
-            f"{vid}.vtt": {"content": content}
-        }
+    # 👈 Tạo dict chứa các file cần upload
+    files_data = {
+        f"{vid}.vtt": {"content": vtt_content}
     }
     
+    # Thêm info.txt nếu có
+    if info_content:
+        files_data[f"{vid}.info.txt"] = {"content": info_content}
+    elif youtube_link:
+        # Tạo info content từ env
+        info_content = f"""Video ID: {vid}
+YouTube Link: {youtube_link}
+Generated: {datetime.now().isoformat()}
+"""
+        files_data[f"{vid}.info.txt"] = {"content": info_content}
+    
+    # Thêm metadata.json (tuỳ chọn)
+    files_data[f"{vid}.metadata.json"] = {"content": metadata_content}
+    
+    # Thêm summary.json nếu có
+    summary_file = f"output/{vid}_summary.json"
+    if os.path.exists(summary_file):
+        try:
+            with open(summary_file, 'r', encoding='utf-8') as fh:
+                summary_content = fh.read()
+            files_data[f"{vid}_summary.json"] = {"content": summary_content}
+            print(f"✅ Added summary file")
+        except Exception as e:
+            print(f"⚠️ Cannot read summary: {e}")
+    
+    # 👈 Cập nhật description với link YouTube (nếu có)
+    description = f"🎬 Pinyin AI Subtitle - {vid}"
+    if youtube_link:
+        description = f"🎬 {youtube_link} - Pinyin AI Subtitle"
+    
+    # Tạo payload
+    data = {
+        "description": description,
+        "public": False,
+        "files": files_data
+    }
+    
+    # Tạo hoặc update Gist
     if gist_exists and gist_id:
         print(f'🔄 Updating Gist: {gist_id}')
         response = requests.patch(
@@ -93,6 +165,18 @@ for f in vtt_files:
         result = response.json()
         gist_url = result.get('html_url', '')
         print(f'✅ Gist saved: {gist_url}')
+        
+        # 👈 In ra danh sách file đã upload
+        uploaded_files = result.get('files', {})
+        print(f"📁 Uploaded files:")
+        for filename in uploaded_files.keys():
+            print(f"  - {filename}")
+        
+        # Lưu Gist URL vào file để dùng sau
+        with open(f"output/{vid}_gist_url.txt", 'w', encoding='utf-8') as gf:
+            gf.write(f"Gist URL: {gist_url}\n")
+            gf.write(f"YouTube: {youtube_link}\n")
+            gf.write(f"Video ID: {vid}\n")
     else:
         print(f'❌ Error {response.status_code}: {response.text[:200]}')
 
