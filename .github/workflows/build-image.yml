@@ -5,6 +5,7 @@ on:
     paths:
       - Dockerfile
       - scripts/**/*
+      - requirements.txt  # 👈 THÊM: Khi requirements thay đổi
   workflow_dispatch:
 
 permissions:
@@ -50,7 +51,7 @@ jobs:
           ghcr.io/${{ github.repository }}:latest
           ghcr.io/${{ github.repository }}:${{ github.sha }}
         labels: ${{ steps.meta.outputs.labels }}
-        # 🆕 SỬA CACHE - BUILD SẠCH
+        # 🆕 CACHE CONFIG
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        no-cache: true  # 🆕 THÊM DÒNG NÀY ĐỂ BUILD KHÔNG DÙNG CACHE
+        no-cache: true  # Build sạch để đảm bảo script mới nhất
