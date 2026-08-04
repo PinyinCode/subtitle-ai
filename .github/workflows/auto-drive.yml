@@ -1,0 +1,176 @@
+name: Auto Process from Drive
+
+on:
+  repository_dispatch:
+    types:
+      - new_drive_file  # 👈 Sự kiện từ Google Apps Script
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    # 👈 ĐỊNH NGHĨA TÊN IMAGE (CHỮ THƯỜNG)
+    - name: Set image name
+      id: image
+      run: |
+        echo "image=ghcr.io/${{ github.repository_owner }}/subtitle-ai" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
+        echo "✅ Image: ${{ steps.image.outputs.image }}"
+    
+    # 👈 TẠO LOCK ĐỂ TRÁNH XỬ LÝ TRÙNG
+    - name: Create processing lock
+      env:
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+      run: |
+        mkdir -p .processing
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" > ".processing/${VIDEO_ID}.lock"
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add .processing/
+        git diff --staged --quiet || (git commit -m "Lock: Processing ${VIDEO_ID}" && git push) || echo "Lock already exists"
+    
+    # 👈 TẢI AUDIO TỪ GOOGLE DRIVE
+    - name: Download from Google Drive
+      env:
+        DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+      run: |
+        pip install gdown
+        mkdir -p data/audio
+        
+        echo "📥 Downloading from Google Drive..."
+        echo "File ID: $DRIVE_FILE_ID"
+        echo "Video ID: $VIDEO_ID"
+        
+        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
+        
+        if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
+          echo "✅ Downloaded: ${VIDEO_ID}.m4a"
+        else
+          echo "❌ Download failed!"
+          exit 1
+        fi
+    
+    # 👈 LOGIN GHCR
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    # 👈 PULL DOCKER IMAGE
+    - name: Pull AI Docker image
+      run: |
+        docker pull ${{ steps.image.outputs.image }}:latest || true
+        echo "✅ Docker image ready"
+    
+    # 👈 XỬ LÝ AUDIO VỚI AI
+    - name: Process audio with AI
+      id: process
+      env:
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        echo "🤖 Processing audio with AI..."
+        mkdir -p output
+        AUDIO_FILE="data/audio/${VIDEO_ID}.m4a"
+        
+        if [ ! -f "$AUDIO_FILE" ]; then
+          echo "❌ Audio file not found: $AUDIO_FILE"
+          exit 1
+        fi
+        
+        echo "🎬 Video ID: $VIDEO_ID"
+        echo "📁 Audio file: $AUDIO_FILE"
+        
+        # 👈 CHẠY DOCKER VỚI SCRIPT MỚI (TỰ ĐỘNG TÌM YOUTUBE LINK)
+        docker run --rm \
+          -v $(pwd):/app \
+          -w /app \
+          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+          ${{ steps.image.outputs.image }}:latest \
+          bash -c "
+            echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
+            echo '✅ Token prefix: '\${HF_TOKEN:0:10}
+            python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'
+          "
+        
+        # 👈 KIỂM TRA FILE VTT
+        if [ -f "output/${VIDEO_ID}.vtt" ]; then
+          echo "✅ AI processing completed!"
+          echo "has_subtitle=true" >> $GITHUB_OUTPUT
+          
+          # 👈 ĐỌC YOUTUBE LINK TỪ FILE INFO
+          if [ -f "output/${VIDEO_ID}.info.txt" ]; then
+            YOUTUBE_LINK=$(grep "YouTube Link:" "output/${VIDEO_ID}.info.txt" | cut -d' ' -f3-)
+            echo "🔗 YouTube: $YOUTUBE_LINK"
+            echo "youtube_link=$YOUTUBE_LINK" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "❌ AI processing failed!"
+          echo "has_subtitle=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+    
+    # 👈 UPLOAD LÊN GIST
+    - name: Upload subtitle to Gist
+      if: steps.process.outputs.has_subtitle == 'true'
+      env:
+        GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+        YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
+      run: |
+        echo "📤 Uploading subtitle to Gist..."
+        echo "🎯 Video ID: $VIDEO_ID"
+        echo "🔗 YouTube: $YOUTUBE_LINK"
+        
+        if [ ! -f "output/${VIDEO_ID}.vtt" ]; then
+          echo "❌ VTT file not found!"
+          exit 1
+        fi
+        
+        # 👈 SCRIPT UPLOAD (ĐÃ SỬA ĐỂ NHẬN YOUTUBE_LINK)
+        python scripts/push_to_gist.py
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Upload to Gist successful!"
+          echo "gist_uploaded=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Upload to Gist FAILED!"
+          echo "gist_uploaded=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+    
+    # 👈 XÓA LOCK
+    - name: Remove processing lock
+      if: always()
+      env:
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+      run: |
+        rm -f ".processing/${VIDEO_ID}.lock"
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add .processing/
+        git diff --staged --quiet || (git commit -m "Unlock: ${VIDEO_ID}" && git push) || echo "No lock to remove"
+    
+    # 👈 DỌN DẸP
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f data/audio/*.m4a
+        touch data/audio/.gitkeep
+        rm -f output/*.vtt
+        rm -f output/*_summary.json
+        rm -f output/*.info.txt
+        touch output/.gitkeep
+        echo "✅ Cleaned up"
