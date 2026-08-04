@@ -4,12 +4,14 @@ YouTube Subtitle Generator - Faster Whisper
 Tao phu de 3 dong: Chinese + Pinyin + Vietnamese
 Encoding: UTF-8 (khong BOM)
 CHI XU LY 1 FILE AUDIO MOI NHAT
+TU DONG TIM YOUTUBE LINK TU TEN FILE
 """
 
 import os
 import sys
 import json
 import glob
+import re
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -34,6 +36,65 @@ except ImportError:
     from pypinyin import pinyin, Style
 
 
+def extract_video_id_from_filename(filename):
+    """
+    Trích xuất video ID từ tên file
+    Hỗ trợ nhiều định dạng:
+    - abc123xyz.m4a (trực tiếp)
+    - video_abc123xyz.m4a (có tiền tố)
+    - abc123xyz_audio.m4a (có hậu tố)
+    - https___youtube.com_watch_v=abc123xyz.m4a (link đã mã hóa)
+    - watch?v=abc123xyz.m4a
+    - youtu.be/abc123xyz.m4a
+    """
+    # Lấy tên file không extension
+    name = Path(filename).stem
+    
+    # Pattern 1: Video ID chuẩn 11 ký tự
+    match = re.search(r'([a-zA-Z0-9_-]{11})', name)
+    if match:
+        video_id = match.group(1)
+        # Kiểm tra không chứa từ khóa
+        if not any(keyword in name.lower() for keyword in ['audio', 'video', 'subtitle', 'track']):
+            return video_id
+    
+    # Pattern 2: Link YouTube đã mã hóa (https___youtube.com_watch_v=abc123xyz)
+    match = re.search(r'watch_v[=_]([a-zA-Z0-9_-]{11})', name)
+    if match:
+        return match.group(1)
+    
+    # Pattern 3: watch?v=abc123xyz
+    match = re.search(r'watch\?v[=_]([a-zA-Z0-9_-]{11})', name)
+    if match:
+        return match.group(1)
+    
+    # Pattern 4: youtu.be/abc123xyz
+    match = re.search(r'youtu\.be[/_]([a-zA-Z0-9_-]{11})', name)
+    if match:
+        return match.group(1)
+    
+    # Pattern 5: vid=abc123xyz
+    match = re.search(r'vid[=_]([a-zA-Z0-9_-]{11})', name, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    
+    # Pattern 6: Nếu không tìm thấy, lấy 11 ký tự cuối cùng
+    if len(name) >= 11:
+        last_11 = name[-11:]
+        if re.match(r'^[a-zA-Z0-9_-]{11}$', last_11):
+            if not any(keyword in last_11 for keyword in ['audio', 'video', 'subtitle', 'track']):
+                return last_11
+    
+    return None
+
+
+def get_youtube_link(video_id):
+    """Tạo link YouTube từ video ID"""
+    if video_id:
+        return f"https://youtube.com/watch?v={video_id}"
+    return ""
+
+
 def format_time(seconds):
     """Format seconds to VTT timestamp: HH:MM:SS.mmm"""
     h = int(seconds // 3600)
@@ -47,13 +108,24 @@ def generate_subtitle(audio_path, output_path=None):
     """Generate VTT subtitle from audio file using faster-whisper"""
     
     audio_file = Path(audio_path)
+    
+    # 👈 LẤY VIDEO_ID TỪ TÊN FILE (GIỮ NGUYÊN CÁCH CŨ)
     video_id = audio_file.stem
+    
+    # 👈 TỰ ĐỘNG TÌM YOUTUBE LINK
+    extracted_id = extract_video_id_from_filename(audio_file.name)
+    youtube_link = get_youtube_link(extracted_id) if extracted_id else ""
+    
+    if extracted_id:
+        print(f"✅ Tự động tìm thấy YouTube link: {youtube_link}")
+    else:
+        print(f"ℹ️ Không tìm thấy YouTube link trong tên file")
     
     # Kiểm tra file audio
     print(f"🔍 Audio file: {audio_path}")
     print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
     
-    # Tạo output path
+    # 👈 VẪN GIỮ NGUYÊN CÁCH ĐẶT TÊN FILE VTT
     if output_path is None:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -68,6 +140,8 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"Output: {output_file}")
     if audio_file.exists():
         print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
+    if youtube_link:
+        print(f"🔗 YouTube: {youtube_link}")
     print(f"{'='*50}\n")
     
     # 👈 LOAD FASTER-WHISPER MODEL
@@ -218,6 +292,7 @@ def generate_subtitle(audio_path, output_path=None):
     # Save summary
     summary = {
         'video_id': video_id,
+        'youtube_link': youtube_link,
         'language': detected_lang,
         'total_segments': len(segment_list),
         'success_segments': success_count,
@@ -233,6 +308,22 @@ def generate_subtitle(audio_path, output_path=None):
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     
+    # 👈 LƯU YOUTUBE LINK VÀO FILE INFO
+    if youtube_link:
+        info_file = output_file.parent / f"{video_id}.info.txt"
+        with open(info_file, 'w', encoding='utf-8') as f:
+            f.write(f"Video ID: {video_id}\n")
+            f.write(f"YouTube Link: {youtube_link}\n")
+            f.write(f"Generated: {datetime.now().isoformat()}\n")
+            f.write(f"Duration: {summary['duration']:.1f}s\n")
+            f.write(f"Language: {detected_lang}\n")
+        print(f"💾 Saved YouTube link to: {info_file}")
+    
+    # 👈 XUẤT VIDEO_ID RA FILE ENV CHO STEP SAU
+    with open('video_id.env', 'w', encoding='utf-8') as f:
+        f.write(f"VIDEO_ID={video_id}\n")
+        f.write(f"YOUTUBE_LINK={youtube_link}\n")
+    
     print(f"\n{'='*50}")
     print(f"COMPLETE!")
     print(f"{'='*50}")
@@ -242,6 +333,8 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"Success: {success_count}/{len(segment_list)}")
     print(f"Language: {detected_lang}")
     print(f"Duration: {summary['duration']:.1f}s")
+    if youtube_link:
+        print(f"🔗 YouTube: {youtube_link}")
     print(f"{'='*50}\n")
     
     return str(output_file)
