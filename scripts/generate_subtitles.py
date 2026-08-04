@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube Subtitle Generator - Faster Whisper
-Tự động tìm video ID từ tên file
+Tự động tìm video ID từ tên file (DÙNG YT-DLP)
 """
 
 import os
@@ -9,18 +9,12 @@ import sys
 import json
 import glob
 import re
+import subprocess
 import argparse
 import time
 from pathlib import Path
 from datetime import datetime
 from difflib import SequenceMatcher
-
-# 👈 CÀI THÊM THƯ VIỆN TÌM KIẾM
-try:
-    from youtube_search import YoutubeSearch
-except ImportError:
-    os.system('pip install -q youtube-search-pytube')
-    from youtube_search import YoutubeSearch
 
 # ===== CÁC HÀM HIỆN CÓ =====
 try:
@@ -42,54 +36,74 @@ except ImportError:
     from pypinyin import pinyin, Style
 
 
-# ===== TÌM VIDEO ID TỪ TÊN FILE =====
+# ===== TÌM VIDEO ID TỪ TÊN FILE (DÙNG YT-DLP) =====
 def search_video_id_from_filename(filename):
     """
-    Tìm video ID bằng cách tìm kiếm YouTube với tên file
+    Tìm video ID bằng yt-dlp search (KHÔNG CẦN youtube-search-python)
     """
     # Lấy tên không extension
     name = Path(filename).stem
     
-    # 👈 LÀM SẠCH TÊN FILE ĐỂ TÌM KIẾM
+    # Làm sạch tên file để tìm kiếm
     search_query = clean_search_query(name)
     print(f"🔍 Tìm kiếm YouTube: '{search_query}'")
     
     try:
-        # 👈 TÌM KIẾM TRÊN YOUTUBE
-        results = YoutubeSearch(search_query, max_results=10).to_dict()
+        # 👈 DÙNG YT-DLP ĐỂ TÌM KIẾM
+        cmd = [
+            'yt-dlp',
+            f'ytsearch10:{search_query}',
+            '--print', '%(title)s|||%(id)s',
+            '--no-warnings',
+            '--no-playlist'
+        ]
         
-        if not results:
+        print(f"⏳ Đang tìm kiếm với yt-dlp...")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0 or not result.stdout:
+            print(f"❌ Không tìm thấy video nào (return code: {result.returncode})")
+            if result.stderr:
+                print(f"   Lỗi: {result.stderr[:200]}")
+            return None
+        
+        # Phân tích kết quả
+        lines = result.stdout.strip().split('\n')
+        # Lọc bỏ dòng trống
+        lines = [l for l in lines if l.strip() and '|||' in l]
+        
+        if not lines:
             print("❌ Không tìm thấy video nào")
             return None
         
-        print(f"✅ Tìm thấy {len(results)} video")
+        print(f"✅ Tìm thấy {len(lines)} video")
         
-        # 👈 SO KHỚP ĐỘ TƯƠNG ĐỒNG
         best_match = None
         best_score = 0
         
-        for video in results:
-            title = video.get('title', '')
-            score = similarity_score(search_query, title)
-            
-            print(f"  📊 Độ khớp: {score:.2f} | {title[:50]}...")
-            
-            if score > best_score:
-                best_score = score
-                best_match = video
+        for line in lines:
+            if '|||' in line:
+                title, video_id = line.split('|||', 1)
+                score = similarity_score(search_query, title)
+                
+                print(f"  📊 Độ khớp: {score:.2f} | {title[:50]}...")
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = {'title': title, 'id': video_id.strip()}
         
-        # 👈 CHỈ CHỌN NẾU ĐỘ KHỚP > 0.3
         if best_match and best_score > 0.3:
-            video_id = best_match.get('id')
-            video_title = best_match.get('title', '')
-            print(f"\n🏆 CHỌN: {video_title}")
-            print(f"🔗 https://youtube.com/watch?v={video_id}")
+            print(f"\n🏆 CHỌN: {best_match['title']}")
+            print(f"🔗 https://youtube.com/watch?v={best_match['id']}")
             print(f"📊 Độ khớp: {best_score:.2f}")
-            return video_id
+            return best_match['id']
         else:
-            print(f"❌ Không có video nào khớp (độ khớp thấp nhất: {best_score:.2f})")
+            print(f"❌ Không có video nào khớp (độ khớp cao nhất: {best_score:.2f})")
             return None
             
+    except subprocess.TimeoutExpired:
+        print("❌ Tìm kiếm quá thời gian (30s)")
+        return None
     except Exception as e:
         print(f"❌ Lỗi tìm kiếm: {e}")
         return None
@@ -106,7 +120,7 @@ def clean_search_query(filename):
     # Loại bỏ các từ khóa không cần thiết
     remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 'hd', 
                     'official', 'music', 'song', 'lyric', 'cover', 'remix', 'live',
-                    'mv', 'ft', 'feat', 'featuring', '128k', '320k']
+                    'mv', 'ft', 'feat', 'featuring', '128k', '320k', 'podcast']
     
     for word in remove_words:
         name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
@@ -122,15 +136,10 @@ def clean_search_query(filename):
 
 def similarity_score(a, b):
     """Tính độ tương đồng giữa 2 chuỗi"""
-    # Chuyển sang chữ thường
     a = a.lower()
     b = b.lower()
-    
-    # Loại bỏ ký tự đặc biệt
     a = re.sub(r'[^\w\s]', ' ', a)
     b = re.sub(r'[^\w\s]', ' ', b)
-    
-    # So khớp
     return SequenceMatcher(None, a, b).ratio()
 
 
@@ -141,7 +150,7 @@ def extract_video_id_from_filename(filename):
     """
     name = Path(filename).stem
     
-    # 👈 CÁCH 1: Tìm 11 ký tự (nếu có)
+    # CÁCH 1: Tìm 11 ký tự (nếu có)
     match = re.search(r'([a-zA-Z0-9_-]{11})', name)
     if match:
         video_id = match.group(1)
@@ -150,7 +159,7 @@ def extract_video_id_from_filename(filename):
             print(f"✅ Tìm thấy video ID trong tên: {video_id}")
             return video_id
     
-    # 👈 CÁCH 2: Tìm kiếm trên YouTube
+    # CÁCH 2: Tìm kiếm trên YouTube bằng yt-dlp
     print(f"🔍 Không tìm thấy ID trong tên, tìm kiếm trên YouTube...")
     video_id = search_video_id_from_filename(filename)
     
@@ -183,7 +192,7 @@ def generate_subtitle(audio_path, output_path=None):
     
     audio_file = Path(audio_path)
     
-    # 👈 TỰ ĐỘNG TÌM VIDEO ID TỪ TÊN FILE
+    # Tự động tìm video ID từ tên file
     video_id = extract_video_id_from_filename(audio_file.name)
     
     if not video_id:
@@ -195,11 +204,10 @@ def generate_subtitle(audio_path, output_path=None):
     youtube_link = get_youtube_link(video_id)
     print(f"🔗 YouTube: {youtube_link}")
     
-    # 👈 VẪN GIỮ NGUYÊN TÊN GỐC CHO FILE VTT
+    # Giữ nguyên tên gốc cho file VTT
     original_name = audio_file.stem
-    output_filename = original_name  # Giữ tên gốc
+    output_filename = original_name
     
-    # Tạo output path
     if output_path is None:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
@@ -215,8 +223,168 @@ def generate_subtitle(audio_path, output_path=None):
     print(f"📁 Output: {output_file}")
     print(f"{'='*50}\n")
     
-    # 👈 PHẦN CÒN LẠI GIỮ NGUYÊN (WHISPER + TRANSLATE)
-    # ... (giữ nguyên code Whisper của bạn)
+    # ===== LOAD WHISPER =====
+    print("Loading Faster-Whisper model (base)...")
+    model = WhisperModel("base", device="cpu", compute_type="int8")
+    print("Model loaded")
+    
+    print("Transcribing audio...")
+    start_time = datetime.now()
+    
+    segments, info = model.transcribe(
+        audio_path,
+        beam_size=5,
+        language=None,
+        task="transcribe",
+        vad_filter=True,
+        vad_parameters=dict(
+            min_silence_duration_ms=500,
+            threshold=0.5
+        )
+    )
+    
+    detected_lang = info.language
+    print(f"Detected language: {detected_lang}")
+    
+    segment_list = []
+    for seg in segments:
+        segment_list.append({
+            'start': seg.start,
+            'end': seg.end,
+            'text': seg.text.strip()
+        })
+    
+    elapsed = (datetime.now() - start_time).total_seconds()
+    print(f"Transcription done in {elapsed:.1f}s")
+    print(f"Segments: {len(segment_list)}")
+    
+    if not segment_list:
+        print("No segments found!")
+        return None
+    
+    # ===== DỊCH =====
+    print("Setting up translators...")
+    
+    to_chinese = None
+    if not detected_lang.startswith('zh'):
+        try:
+            to_chinese = GoogleTranslator(source=detected_lang, target='zh-CN')
+            print(f"  Chinese: {detected_lang} -> zh-CN")
+        except:
+            print(f"⚠️ Cannot translate from {detected_lang} to Chinese")
+    
+    to_vietnamese = GoogleTranslator(source='zh-CN', target='vi')
+    print("  Vietnamese: zh-CN -> vi")
+    
+    # ===== TẠO VTT =====
+    print("\nGenerating subtitles...")
+    
+    vtt_lines = [
+        "WEBVTT",
+        "Kind: captions",
+        "Language: zh-TW",
+        "",
+        ""
+    ]
+    
+    success_count = 0
+    total = len(segment_list)
+    
+    for i, seg in enumerate(segment_list, 1):
+        try:
+            start = format_time(seg['start'])
+            end = format_time(seg['end'])
+            text = seg['text']
+            
+            if not text:
+                continue
+            
+            if to_chinese:
+                try:
+                    chinese_text = to_chinese.translate(text)
+                except:
+                    chinese_text = text
+            else:
+                chinese_text = text
+            
+            try:
+                py_list = pinyin(chinese_text, style=Style.TONE, heteronym=False)
+                pinyin_text = " ".join([item[0] for item in py_list])
+            except:
+                pinyin_text = chinese_text
+            
+            try:
+                vietnamese_text = to_vietnamese.translate(chinese_text)
+            except:
+                vietnamese_text = ""
+            
+            vtt_lines.append(f"{start} --> {end}")
+            vtt_lines.append(chinese_text)
+            vtt_lines.append(pinyin_text)
+            vtt_lines.append(vietnamese_text)
+            vtt_lines.append("")
+            
+            success_count += 1
+            
+            if i % 20 == 0:
+                print(f"   {i}/{total} ({100*i//total}%)")
+                
+        except Exception as e:
+            print(f"   Error at segment {i}: {e}")
+            continue
+    
+    # ===== LƯU FILE =====
+    print(f"\n💾 Saving to: {output_file}")
+    vtt_content = '\n'.join(vtt_lines)
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(vtt_content)
+    
+    if output_file.exists():
+        print(f"✅ File written! Size: {output_file.stat().st_size} bytes")
+    
+    # Lưu summary
+    summary = {
+        'video_id': video_id,
+        'youtube_link': youtube_link,
+        'language': detected_lang,
+        'total_segments': len(segment_list),
+        'success_segments': success_count,
+        'duration': segment_list[-1]['end'] if segment_list else 0,
+        'transcription_time': round(elapsed, 1),
+        'output_file': str(output_file),
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    summary_file = output_file.parent / f"{output_filename}_summary.json"
+    with open(summary_file, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    
+    # Lưu info
+    if youtube_link:
+        info_file = output_file.parent / f"{output_filename}.info.txt"
+        with open(info_file, 'w', encoding='utf-8') as f:
+            f.write(f"Video ID: {video_id}\n")
+            f.write(f"YouTube Link: {youtube_link}\n")
+            f.write(f"Generated: {datetime.now().isoformat()}\n")
+            f.write(f"Language: {detected_lang}\n")
+        print(f"💾 Saved info to: {info_file}")
+    
+    # Xuất env cho workflow
+    with open('video_id.env', 'w', encoding='utf-8') as f:
+        f.write(f"VIDEO_ID={video_id}\n")
+        f.write(f"YOUTUBE_LINK={youtube_link}\n")
+        f.write(f"ORIGINAL_FILENAME={output_filename}\n")
+    
+    print(f"\n{'='*50}")
+    print(f"✅ COMPLETE!")
+    print(f"{'='*50}")
+    print(f"Output: {output_file}")
+    print(f"Success: {success_count}/{len(segment_list)}")
+    print(f"Language: {detected_lang}")
+    if youtube_link:
+        print(f"🔗 YouTube: {youtube_link}")
+    print(f"{'='*50}\n")
     
     return str(output_file)
 
