@@ -1,0 +1,7 @@
+faster-whisper
+deep-translator
+pypinyin
+gdown
+yt-dlp
+requests
+youtube-search-python
