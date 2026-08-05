@@ -10,11 +10,15 @@ import os
 import sys
 import json
 import glob
+import re
+import subprocess
 import argparse
+import time
 from pathlib import Path
 from datetime import datetime
+from difflib import SequenceMatcher
 
-# 👈 CÀI FASTER-WHISPER
+# 👈 IMPORT TRỰC TIẾP (ĐÃ CÀI TRONG DOCKER)
 try:
     from faster_whisper import WhisperModel
 except ImportError:
@@ -33,6 +37,67 @@ except ImportError:
     os.system('pip install -q pypinyin')
     from pypinyin import pinyin, Style
 
+try:
+    from youtube_search import YoutubeSearch
+except ImportError:
+    os.system('pip install -q youtube-search-python')
+    from youtube_search import YoutubeSearch
+
+# ============================================================
+# TÌM VIDEO ID TỪ TÊN FILE
+# ============================================================
+
+def search_youtube_video_id(query):
+    """Tìm video YouTube từ query"""
+    print(f"🔍 Searching YouTube: '{query}'")
+    
+    try:
+        # Dùng yt-dlp nếu có
+        cmd = [
+            'yt-dlp',
+            f'ytsearch5:{query}',
+            '--print', '%(title)s|||%(id)s',
+            '--no-warnings',
+            '--no-playlist',
+            '--ignore-errors'
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode == 0 and result.stdout:
+            lines = [l for l in result.stdout.strip().split('\n') if l and '|||' in l]
+            if lines:
+                best_match = None
+                best_score = 0
+                for line in lines:
+                    title, video_id = line.split('|||', 1)
+                    score = SequenceMatcher(None, query.lower(), title.lower()).ratio()
+                    print(f"  📊 Score: {score:.2f} | {title[:50]}...")
+                    if score > best_score:
+                        best_score = score
+                        best_match = {'title': title, 'id': video_id.strip()}
+                
+                if best_match and best_score > 0.3:
+                    print(f"🏆 Selected: {best_match['title']}")
+                    return best_match['id']
+    except Exception as e:
+        print(f"⚠️ yt-dlp error: {e}")
+    
+    # Fallback: youtube-search-python
+    try:
+        results = YoutubeSearch(query, max_results=5).to_dict()
+        if results:
+            for video in results:
+                title = video.get('title', '')
+                score = SequenceMatcher(None, query.lower(), title.lower()).ratio()
+                print(f"  📊 Score: {score:.2f} | {title[:50]}...")
+                if score > 0.3:
+                    video_id = video.get('id')
+                    print(f"🏆 Selected: {title}")
+                    return video_id
+    except Exception as e:
+        print(f"⚠️ youtube-search error: {e}")
+    
+    return None
 
 def format_time(seconds):
     """Format seconds to VTT timestamp: HH:MM:SS.mmm"""
@@ -42,16 +107,21 @@ def format_time(seconds):
     ms = int((seconds - int(seconds)) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
-
-def generate_subtitle(audio_path, output_path=None):
+def generate_subtitle(audio_path, output_name=None, output_path=None):
     """Generate VTT subtitle from audio file using faster-whisper"""
     
     audio_file = Path(audio_path)
-    video_id = audio_file.stem
+    
+    # Sử dụng tên được truyền vào hoặc lấy từ file
+    if output_name:
+        video_id = output_name
+    else:
+        video_id = audio_file.stem
     
     # Kiểm tra file audio
     print(f"🔍 Audio file: {audio_path}")
     print(f"🔍 Audio exists: {os.path.exists(audio_path)}")
+    print(f"🔍 Video ID: {video_id}")
     
     # Tạo output path
     if output_path is None:
@@ -70,38 +140,43 @@ def generate_subtitle(audio_path, output_path=None):
         print(f"Size: {audio_file.stat().st_size / 1024:.0f} KB")
     print(f"{'='*50}\n")
     
+    # 👈 TÌM VIDEO ID TRÊN YOUTUBE
+    print("🔍 Searching for YouTube video...")
+    youtube_video_id = search_youtube_video_id(video_id)
+    youtube_link = f"https://youtube.com/watch?v={youtube_video_id}" if youtube_video_id else ""
+    
+    if youtube_video_id:
+        print(f"🎯 Found video ID: {youtube_video_id}")
+        print(f"🔗 {youtube_link}")
+    else:
+        print("⚠️ No YouTube video found")
+    
     # 👈 LOAD FASTER-WHISPER MODEL
-    print("Loading Faster-Whisper model (base)...")
+    print("\nLoading Faster-Whisper model (base)...")
     print("⏳ This may take 10-30 seconds to download model...")
     
-    # Dùng CPU với int8 để tiết kiệm RAM và tăng tốc
     model = WhisperModel("base", device="cpu", compute_type="int8")
-    # 👆 Có thể đổi thành "small", "medium", "large-v3"
-    # compute_type: "int8" (nhanh nhất), "float16" (cân bằng), "float32" (chính xác nhất)
+    print("✅ Model loaded")
     
-    print("Model loaded")
-    
-    # 👈 TRANSCRIBE VỚI FASTER-WHISPER
-    print("Transcribing audio...")
+    # 👈 TRANSCRIBE
+    print("\nTranscribing audio...")
     start_time = datetime.now()
     
     segments, info = model.transcribe(
         audio_path,
-        beam_size=5,              # 👈 Tăng độ chính xác
-        language=None,            # 👈 Tự động phát hiện
-        task="transcribe",        # 👈 Chỉ transcribe, không dịch
-        vad_filter=True,          # 👈 Lọc im lặng để tăng tốc
+        beam_size=5,
+        language=None,
+        task="transcribe",
+        vad_filter=True,
         vad_parameters=dict(
             min_silence_duration_ms=500,
             threshold=0.5
         )
     )
     
-    # Lấy thông tin ngôn ngữ
     detected_lang = info.language
-    print(f"Detected language: {detected_lang}")
+    print(f"✅ Detected language: {detected_lang}")
     
-    # Chuyển segments sang list
     segment_list = []
     for seg in segments:
         segment_list.append({
@@ -111,26 +186,26 @@ def generate_subtitle(audio_path, output_path=None):
         })
     
     elapsed = (datetime.now() - start_time).total_seconds()
-    print(f"Transcription done in {elapsed:.1f}s")
-    print(f"Segments: {len(segment_list)}")
+    print(f"✅ Transcription done in {elapsed:.1f}s")
+    print(f"📊 Segments: {len(segment_list)}")
     
     if not segment_list:
-        print("No segments found!")
+        print("❌ No segments found!")
         return None
     
     # Initialize translators
-    print("Setting up translators...")
+    print("\nSetting up translators...")
     
     to_chinese = None
     if not detected_lang.startswith('zh'):
         try:
             to_chinese = GoogleTranslator(source=detected_lang, target='zh-CN')
-            print(f"  Chinese: {detected_lang} -> zh-CN")
-        except:
-            print(f"⚠️ Cannot translate from {detected_lang} to Chinese")
+            print(f"  ✅ Chinese: {detected_lang} -> zh-CN")
+        except Exception as e:
+            print(f"⚠️ Cannot translate to Chinese: {e}")
     
     to_vietnamese = GoogleTranslator(source='zh-CN', target='vi')
-    print("  Vietnamese: zh-CN -> vi")
+    print("  ✅ Vietnamese: zh-CN -> vi")
     
     # Generate VTT content
     print("\nGenerating subtitles...")
@@ -192,7 +267,7 @@ def generate_subtitle(audio_path, output_path=None):
                 
         except Exception as e:
             error_count += 1
-            print(f"   Error at segment {i}: {e}")
+            print(f"   ⚠️ Error at segment {i}: {e}")
             continue
     
     # Save VTT file
@@ -208,16 +283,22 @@ def generate_subtitle(audio_path, output_path=None):
         print(f"❌ Error writing file: {e}")
         return None
     
-    # Kiểm tra file đã tạo
-    if output_file.exists():
-        print(f"✅ File exists! Size: {output_file.stat().st_size} bytes")
-    else:
-        print(f"❌ File does NOT exist after write!")
-        return None
+    # Save info file
+    info_file = output_file.parent / f"{video_id}.info.txt"
+    with open(info_file, 'w', encoding='utf-8') as f:
+        f.write(f"Video ID: {youtube_video_id or video_id}\n")
+        f.write(f"YouTube Link: {youtube_link}\n")
+        f.write(f"Original Name: {video_id}\n")
+        f.write(f"Generated: {datetime.now().isoformat()}\n")
+        f.write(f"Language: {detected_lang}\n")
+        f.write(f"Segments: {len(segment_list)}\n")
+    print(f"💾 Saved info to: {info_file}")
     
     # Save summary
     summary = {
         'video_id': video_id,
+        'youtube_video_id': youtube_video_id,
+        'youtube_link': youtube_link,
         'language': detected_lang,
         'total_segments': len(segment_list),
         'success_segments': success_count,
@@ -233,67 +314,53 @@ def generate_subtitle(audio_path, output_path=None):
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     
+    # Xuất env cho workflow
+    env_file = Path('video_id.env')
+    with open(env_file, 'w', encoding='utf-8') as f:
+        f.write(f"VIDEO_ID={youtube_video_id or video_id}\n")
+        f.write(f"YOUTUBE_LINK={youtube_link}\n")
+        f.write(f"ORIGINAL_FILENAME={video_id}\n")
+    print(f"💾 Saved env to: {env_file}")
+    
     print(f"\n{'='*50}")
-    print(f"COMPLETE!")
+    print(f"✅ COMPLETE!")
     print(f"{'='*50}")
     print(f"Output: {output_file}")
     if output_file.exists():
         print(f"Size: {output_file.stat().st_size / 1024:.1f} KB")
     print(f"Success: {success_count}/{len(segment_list)}")
     print(f"Language: {detected_lang}")
-    print(f"Duration: {summary['duration']:.1f}s")
+    if youtube_link:
+        print(f"🔗 YouTube: {youtube_link}")
     print(f"{'='*50}\n")
     
     return str(output_file)
 
+# ============================================================
+# MAIN
+# ============================================================
 
-# ===== HÀM MAIN =====
 def main():
-    """Main function - Process audio file"""
     parser = argparse.ArgumentParser(description='Generate subtitles from audio')
-    parser.add_argument('--audio', help='Path to audio file (specific file)')
+    parser.add_argument('--audio', required=True, help='Path to audio file')
+    parser.add_argument('--name', help='Output name (without extension)')
     parser.add_argument('--output', help='Path to output VTT file')
-    parser.add_argument('--latest', action='store_true', help='Process only the latest file')
     
     args = parser.parse_args()
     
-    if args.audio:
-        audio_path = args.audio
-        if not os.path.exists(audio_path):
-            print(f"❌ Audio file not found: {audio_path}")
-            return
-        
-        output_path = args.output if args.output else None
-        result = generate_subtitle(audio_path, output_path)
-        if result:
-            print(f"\n✅ Done: {result}")
+    audio_path = args.audio
+    if not os.path.exists(audio_path):
+        print(f"❌ Audio file not found: {audio_path}")
         return
-    
-    print("\n🔍 Finding audio files...")
-    audio_files = glob.glob("data/audio/*.m4a")
-    
-    if not audio_files:
-        print("❌ No audio files found in data/audio/")
-        return
-    
-    audio_files.sort(key=os.path.getmtime, reverse=True)
-    latest_audio = audio_files[0]
-    
-    print(f"Found {len(audio_files)} file(s)")
-    print(f"📌 Processing latest: {latest_audio}")
-    
-    if len(audio_files) > 1:
-        print(f"   Skipping {len(audio_files)-1} old file(s)")
     
     try:
-        result = generate_subtitle(latest_audio)
+        result = generate_subtitle(audio_path, args.name, args.output)
         if result:
             print(f"\n✅ Done: {result}")
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     main()
