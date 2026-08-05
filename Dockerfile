@@ -13,7 +13,7 @@ RUN apt-get update && \
 # Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip
 
-# 👈 CÀI TẤT CẢ PACKAGES TRONG 1 LẦN (QUAN TRỌNG)
+# CÀI TẤT CẢ PACKAGES
 RUN pip install --no-cache-dir \
     yt-dlp \
     faster-whisper \
@@ -27,10 +27,10 @@ RUN pip install --no-cache-dir \
     google-auth-httplib2 \
     google-auth-oauthlib
 
-# 👈 VERIFY TẤT CẢ PACKAGES ĐÃ CÀI
+# VERIFY TẤT CẢ PACKAGES
 RUN python -c "import faster_whisper; import deep_translator; import pypinyin; import youtube_search; print('✅ All packages installed successfully')"
 
-# Download Whisper model (cache để chạy nhanh hơn)
+# Download Whisper model
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"
 
 WORKDIR /app
@@ -41,11 +41,12 @@ COPY scripts/ ./scripts/
 # Tạo thư mục cần thiết
 RUN mkdir -p data/audio output
 
-# Copy data (nếu có)
-COPY data/ ./data/ 2>/dev/null || true
-COPY output/ ./output/ 2>/dev/null || true
+# 👈 SỬA LỖI: Bỏ 2>/dev/null || true
+# Copy data và output (nếu có)
+COPY data/ ./data/ 
+COPY output/ ./output/
 
-# 👈 VERIFY LẦN CUỐI
+# VERIFY LẦN CUỐI
 RUN python -c "from youtube_search import YoutubeSearch; print('✅ YoutubeSearch ready')" && \
     python -c "from faster_whisper import WhisperModel; print('✅ Faster-Whisper ready')"
 
