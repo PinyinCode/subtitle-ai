@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube Subtitle Generator - Faster Whisper
-Tự động tìm video ID từ tên file
-Hỗ trợ yt-dlp và fallback youtube-search-python
+Tự động tìm video ID từ tên file (yt-dlp + fallback youtube-search-python)
 """
 
 import os
@@ -17,37 +16,44 @@ from datetime import datetime
 from difflib import SequenceMatcher
 
 # ============================================================
-# KIỂM TRA VÀ CÀI DEPENDENCIES
+# HÀM CÀI ĐẶT PACKAGE (CHỈ KHI CẦN)
 # ============================================================
 
-def ensure_package(package_name, import_name=None):
-    """Kiểm tra và cài đặt package nếu chưa có"""
-    if import_name is None:
-        import_name = package_name
+def install_package(package):
+    """Cài package bằng pip"""
+    print(f"📦 Đang cài {package}...")
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', package])
+    print(f"✅ Đã cài {package}")
+
+def safe_import(module_name, package_name=None):
+    """Import module, nếu lỗi thì cài và import lại"""
+    if package_name is None:
+        package_name = module_name
     try:
-        __import__(import_name)
-        return True
+        return __import__(module_name)
     except ImportError:
-        print(f"📦 Đang cài {package_name}...")
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', package_name], 
-                      check=True, timeout=60)
-        print(f"✅ Đã cài {package_name}")
-        return True
-
-# Cài các thư viện cần thiết
-ensure_package('faster-whisper')
-ensure_package('deep-translator')
-ensure_package('pypinyin')
-ensure_package('youtube-search-python', 'youtube_search')
-
-# Import các thư viện
-from faster_whisper import WhisperModel
-from deep_translator import GoogleTranslator
-from pypinyin import pinyin, Style
-from youtube_search import YoutubeSearch
+        install_package(package_name)
+        return __import__(module_name)
 
 # ============================================================
-# HÀM TÌM VIDEO ID
+# IMPORT CÁC THƯ VIỆN CHÍNH
+# ============================================================
+
+# Các thư viện bắt buộc
+WhisperModel = safe_import('faster_whisper', 'faster-whisper').WhisperModel
+GoogleTranslator = safe_import('deep_translator', 'deep-translator').GoogleTranslator
+pinyin = safe_import('pypinyin', 'pypinyin').pinyin
+Style = safe_import('pypinyin', 'pypinyin').Style
+
+# Import youtube-search-python (có fallback nếu chưa có)
+try:
+    from youtube_search import YoutubeSearch
+except ImportError:
+    install_package('youtube-search-python')
+    from youtube_search import YoutubeSearch
+
+# ============================================================
+# TÌM VIDEO ID TỪ TÊN FILE
 # ============================================================
 
 def search_video_id_from_filename(filename):
@@ -175,7 +181,7 @@ def get_youtube_link(video_id):
     return f"https://youtube.com/watch?v={video_id}" if video_id else ""
 
 # ============================================================
-# HÀM CHÍNH TẠO SUBTITLE
+# TẠO SUBTITLE (WHISPER + DỊCH)
 # ============================================================
 
 def format_time(seconds):
