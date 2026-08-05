@@ -2,7 +2,7 @@
 """
 YouTube Subtitle Generator - Faster Whisper
 Tự động tìm video ID từ tên file
-CHỈ TẠO LINK NẾU TÌM THẤY VIDEO THẬT TRÊN YOUTUBE
+CHỈ CẦN LẤY LINK, KHÔNG CẦN XÁC MINH VIDEO
 HỖ TRỢ TẤT CẢ NGÔN NGỮ: TIẾNG VIỆT, TIẾNG TRUNG, TIẾNG ANH
 """
 
@@ -65,30 +65,6 @@ try:
 except ImportError:
     os.system('pip install -q pypinyin')
     from pypinyin import pinyin, Style
-
-
-# ===== XÁC MINH VIDEO TỒN TẠI =====
-def verify_video_exists(video_id):
-    """
-    Kiểm tra video có tồn tại trên YouTube không
-    """
-    if not video_id or len(video_id) != 11:
-        return False
-    
-    try:
-        cmd = [
-            'yt-dlp',
-            f'https://youtube.com/watch?v={video_id}',
-            '--simulate',
-            '--no-warnings',
-            '--no-check-certificates',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            '--extractor-args', 'youtube:skip=hls,dash,player_js,webpage'
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
-        return result.returncode == 0
-    except Exception:
-        return False
 
 
 # ===== TÌM VIDEO ID TỪ TÊN FILE =====
@@ -156,13 +132,8 @@ def search_video_id_from_filename(filename):
             print(f"\n🏆 CHỌN: {best_match['title']}")
             print(f"🔗 https://youtube.com/watch?v={best_match['id']}")
             print(f"📊 Độ khớp: {best_score:.2f}")
-            
-            if verify_video_exists(best_match['id']):
-                print(f"✅ Video tồn tại trên YouTube")
-                return best_match['id']
-            else:
-                print(f"⚠️ Video không tồn tại trên YouTube")
-                return None
+            # 👈 KHÔNG XÁC MINH, TRẢ VỀ LUÔN
+            return best_match['id']
         else:
             print(f"❌ Không có video nào khớp (độ khớp cao nhất: {best_score:.2f})")
             return None
@@ -181,7 +152,7 @@ def clean_search_query(filename):
     """
     name = Path(filename).stem
     
-    # 👈 XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT: [] () {} + . , - _ / \ | ...
+    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT: [] () {} + . , - _ / \ | ...
     name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
     
     # Xóa emoji
@@ -269,7 +240,7 @@ def similarity_score(query, title):
 def extract_video_id_from_filename(filename):
     """
     Tự động tìm video ID từ tên file
-    CHỈ TRẢ VỀ VIDEO ID NẾU TÌM THẤY TRÊN YOUTUBE
+    CHỈ CẦN LẤY LINK, KHÔNG CẦN XÁC MINH
     """
     name = Path(filename).stem
     folder = Path(filename).parent
@@ -286,24 +257,14 @@ def extract_video_id_from_filename(filename):
             if match:
                 video_id = match.group(1)
                 print(f"📄 Đọc video ID từ file .txt: {video_id}")
-                if verify_video_exists(video_id):
-                    print(f"✅ Video tồn tại trên YouTube")
-                    return video_id
-                else:
-                    print(f"⚠️ Video ID {video_id} không tồn tại trên YouTube")
-                    return None
+                return video_id
             
             # Tìm link YouTube đầy đủ
             match = re.search(r'https?://(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})', content)
             if match:
                 video_id = match.group(1)
                 print(f"📄 Đọc link YouTube từ file .txt: {video_id}")
-                if verify_video_exists(video_id):
-                    print(f"✅ Video tồn tại trên YouTube")
-                    return video_id
-                else:
-                    print(f"⚠️ Link YouTube không hợp lệ")
-                    return None
+                return video_id
                     
         except Exception as e:
             print(f"⚠️ Lỗi đọc file .txt: {e}")
@@ -313,7 +274,7 @@ def extract_video_id_from_filename(filename):
     video_id = search_video_id_from_filename(filename)
     
     if video_id:
-        print(f"✅ Tìm thấy video ID hợp lệ: {video_id}")
+        print(f"✅ Tìm thấy video ID: {video_id}")
         return video_id
     
     print(f"❌ KHÔNG TÌM THẤY VIDEO NÀO CHO: {filename}")
