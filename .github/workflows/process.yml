@@ -11,7 +11,7 @@ on:
     types:
       - process_audio
       - process_drive_audio
-      - new_drive_file  # 👈 NHẬN TỪ GOOGLE APPS SCRIPT
+      - new_drive_file
 
 permissions:
   contents: write
@@ -35,7 +35,7 @@ jobs:
         echo "📝 Name without ext: ${{ github.event.client_payload.file_name_without_ext }}"
         echo "⏰ Timestamp: ${{ github.event.client_payload.timestamp }}"
     
-    # 👈 ĐỊNH NGHĨA TÊN IMAGE
+    # 👈 CHUYỂN TÊN REPO THÀNH CHỮ THƯỜNG
     - name: Set image name
       id: image
       run: |
@@ -93,7 +93,6 @@ jobs:
           echo "✅ Downloaded: ${AUDIO_NAME}"
           echo "file_name=${AUDIO_NAME}" >> $GITHUB_OUTPUT
           
-          # Lấy tên không extension
           if [ -n "$FILE_NAME_WITHOUT_EXT" ]; then
             echo "name_without_ext=${FILE_NAME_WITHOUT_EXT}" >> $GITHUB_OUTPUT
           else
@@ -117,7 +116,7 @@ jobs:
         docker pull ${{ steps.image.outputs.image }}:latest || true
         echo "✅ Docker image ready"
     
-    # 👈 XỬ LÝ AUDIO - TÌM VIDEO ID TỪ TÊN FILE
+    # 👈 XỬ LÝ AUDIO
     - name: Process audio with AI
       id: process
       env:
@@ -140,7 +139,6 @@ jobs:
         
         FILE_NAME=$(basename "$AUDIO_FILE")
         
-        # Nếu chưa có NAME_WITHOUT_EXT từ download, lấy từ file
         if [ -z "$NAME_WITHOUT_EXT" ]; then
           NAME_WITHOUT_EXT="${FILE_NAME%.*}"
         fi
@@ -153,7 +151,6 @@ jobs:
         
         mkdir -p output
         
-        # 👈 CHẠY SCRIPT TRONG CONTAINER
         docker run --rm \
           -v $(pwd):/app \
           -w /app \
@@ -174,7 +171,6 @@ jobs:
           echo "✅ Processing completed"
           echo "has_audio=true" >> $GITHUB_OUTPUT
           
-          # Đọc YouTube link từ file info
           if [ -f "output/${NAME_WITHOUT_EXT}.info.txt" ]; then
             YOUTUBE_LINK=$(grep "YouTube Link:" "output/${NAME_WITHOUT_EXT}.info.txt" | cut -d' ' -f3- || echo "")
             VIDEO_ID=$(grep "Video ID:" "output/${NAME_WITHOUT_EXT}.info.txt" | cut -d' ' -f3- || echo "")
@@ -214,7 +210,6 @@ jobs:
           exit 1
         fi
         
-        # Kiểm tra token
         if [ -z "$GIST_TOKEN" ] && [ -z "$GH_TOKEN" ]; then
           echo "❌ No GIST_TOKEN or GH_TOKEN found!"
           exit 1
