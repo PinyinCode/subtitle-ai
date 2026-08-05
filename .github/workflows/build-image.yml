@@ -31,18 +31,11 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     
-    # 👈 CHUYỂN TÊN REPO THÀNH CHỮ THƯỜNG
-    - name: Convert repository name to lowercase
-      id: repo
-      run: |
-        echo "image=ghcr.io/${{ github.repository_owner }}/subtitle-ai" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
-        echo "✅ Image: ${{ steps.repo.outputs.image }}"
-    
     - name: Extract metadata for Docker
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ steps.repo.outputs.image }}
+        images: ghcr.io/${{ github.repository }}
         tags: |
           type=raw,value=latest
           type=sha,prefix=sha-
@@ -54,9 +47,10 @@ jobs:
         push: true
         platforms: linux/amd64,linux/arm64
         tags: |
-          ${{ steps.repo.outputs.image }}:latest
-          ${{ steps.repo.outputs.image }}:${{ github.sha }}
+          ghcr.io/${{ github.repository }}:latest
+          ghcr.io/${{ github.repository }}:${{ github.sha }}
         labels: ${{ steps.meta.outputs.labels }}
+        # 🆕 SỬA CACHE - BUILD SẠCH
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        no-cache: true
+        no-cache: true  # 🆕 THÊM DÒNG NÀY ĐỂ BUILD KHÔNG DÙNG CACHE
