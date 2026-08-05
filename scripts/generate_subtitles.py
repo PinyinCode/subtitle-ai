@@ -3,6 +3,7 @@
 YouTube Subtitle Generator - Faster Whisper
 Tự động tìm video ID từ tên file
 CHỈ TẠO LINK NẾU TÌM THẤY VIDEO THẬT TRÊN YOUTUBE
+HỖ TRỢ TẤT CẢ NGÔN NGỮ: TIẾNG VIỆT, TIẾNG TRUNG, TIẾNG ANH
 """
 
 import os
@@ -81,19 +82,12 @@ def verify_video_exists(video_id):
             '--simulate',
             '--no-warnings',
             '--no-check-certificates',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             '--extractor-args', 'youtube:skip=hls,dash,player_js,webpage'
         ]
         result = subprocess.run(cmd, capture_output=True, timeout=30)
-        if result.returncode == 0:
-            return True
-        else:
-            # Kiểm tra nếu lỗi là do video không tồn tại
-            if result.stderr and ('Video unavailable' in result.stderr or '404' in result.stderr):
-                return False
-            return False
-    except Exception as e:
-        print(f"⚠️ Lỗi xác minh video: {e}")
+        return result.returncode == 0
+    except Exception:
         return False
 
 
@@ -119,17 +113,14 @@ def search_video_id_from_filename(filename):
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             '--extractor-args', 'youtube:skip=hls,dash,player_js,webpage',
             '--ignore-errors',
-            '--retries', '5',
-            '--fragment-retries', '5'
+            '--retries', '5'
         ]
         
         print(f"⏳ Đang tìm kiếm với yt-dlp...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         
         if result.returncode != 0 or not result.stdout:
-            print(f"❌ Không tìm thấy video nào (return code: {result.returncode})")
-            if result.stderr:
-                print(f"   Lỗi: {result.stderr[:200]}")
+            print(f"❌ Không tìm thấy video nào")
             return None
         
         lines = result.stdout.strip().split('\n')
@@ -149,21 +140,23 @@ def search_video_id_from_filename(filename):
                 parts = line.split('|||', 1)
                 if len(parts) == 2:
                     title, video_id = parts
-                    # Kiểm tra video_id có đúng 11 ký tự không
-                    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id.strip()):
+                    video_id = video_id.strip()
+                    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
                         continue
+                    
                     score = similarity_score(search_query, title)
                     print(f"  📊 Độ khớp: {score:.2f} | {title[:50]}...")
+                    
                     if score > best_score:
                         best_score = score
-                        best_match = {'title': title, 'id': video_id.strip()}
+                        best_match = {'title': title, 'id': video_id}
         
-        if best_match and best_score > 0.3:
+        # Ngưỡng khớp 0.4
+        if best_match and best_score > 0.4:
             print(f"\n🏆 CHỌN: {best_match['title']}")
             print(f"🔗 https://youtube.com/watch?v={best_match['id']}")
             print(f"📊 Độ khớp: {best_score:.2f}")
             
-            # 👈 XÁC MINH VIDEO TỒN TẠI
             if verify_video_exists(best_match['id']):
                 print(f"✅ Video tồn tại trên YouTube")
                 return best_match['id']
@@ -175,7 +168,7 @@ def search_video_id_from_filename(filename):
             return None
             
     except subprocess.TimeoutExpired:
-        print("❌ Tìm kiếm quá thời gian (90s)")
+        print("❌ Tìm kiếm quá thời gian")
         return None
     except Exception as e:
         print(f"❌ Lỗi tìm kiếm: {e}")
@@ -183,8 +176,13 @@ def search_video_id_from_filename(filename):
 
 
 def clean_search_query(filename):
-    """Làm sạch tên file để tìm kiếm - GIỮ NGUYÊN NGÔN NGỮ"""
+    """
+    Làm sạch tên file - XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT (KỂ CẢ DẤU GẠCH NGANG)
+    """
     name = Path(filename).stem
+    
+    # 👈 XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT: [] () {} + . , - _ / \ | ...
+    name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
     
     # Xóa emoji
     emoji_pattern = re.compile("["
@@ -199,13 +197,12 @@ def clean_search_query(filename):
         "]+", flags=re.UNICODE)
     name = emoji_pattern.sub(r'', name)
     
-    # GIỮ NGUYÊN CHỮ VÀ SỐ (KHÔNG XÓA KÝ TỰ ĐẶC BIỆT CỦA TIẾNG VIỆT/TRUNG)
-    name = re.sub(r'\s+', ' ', name).strip()
+    # Xóa các từ khóa không cần thiết
+    remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 
+                    'official', '128k', '320k', 'podcast']
     
-    # Chỉ xóa các ký tự đặc biệt không cần thiết nhưng giữ lại dấu cách
-    # \u00C0-\u024F: ký tự có dấu của tiếng Việt và các ngôn ngữ châu Âu
-    # \u4E00-\u9FFF: ký tự tiếng Trung
-    name = re.sub(r'[^\w\s\u00C0-\u024F\u4E00-\u9FFF]', ' ', name)
+    for word in remove_words:
+        name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
     
     # Xóa khoảng trắng thừa
     name = re.sub(r'\s+', ' ', name).strip()
@@ -213,13 +210,60 @@ def clean_search_query(filename):
     return name
 
 
-def similarity_score(a, b):
-    """Tính độ tương đồng giữa 2 chuỗi"""
-    a = a.lower()
-    b = b.lower()
-    a = re.sub(r'[^\w\s\u00C0-\u024F\u4E00-\u9FFF]', ' ', a)
-    b = re.sub(r'[^\w\s\u00C0-\u024F\u4E00-\u9FFF]', ' ', b)
-    return SequenceMatcher(None, a, b).ratio()
+def similarity_score(query, title):
+    """
+    Tính độ tương đồng - ƯU TIÊN CHUỖI LIỀN KỀ
+    """
+    # Xóa ký tự đặc biệt (bao gồm cả dấu gạch ngang)
+    q = re.sub(r'[^a-zA-Z0-9\u00C0-\u024F\u4E00-\u9FFF\s]', ' ', query.lower()).strip()
+    t = re.sub(r'[^a-zA-Z0-9\u00C0-\u024F\u4E00-\u9FFF\s]', ' ', title.lower()).strip()
+    
+    # Tách từ
+    q_words = q.split()
+    t_words = t.split()
+    
+    if not q_words or not t_words:
+        return 0.0
+    
+    # Tìm chuỗi con chung dài nhất (theo thứ tự)
+    def longest_common_subsequence(a, b):
+        m, n = len(a), len(b)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if a[i-1] == b[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        return dp[m][n]
+    
+    # Tìm chuỗi con liền kề dài nhất
+    def longest_common_substring(a, b):
+        m, n = len(a), len(b)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        max_len = 0
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if a[i-1] == b[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                    if dp[i][j] > max_len:
+                        max_len = dp[i][j]
+        return max_len
+    
+    # Tính điểm
+    lcs_len = longest_common_subsequence(q_words, t_words)
+    lcs_score = lcs_len / max(len(q_words), len(t_words)) if max(len(q_words), len(t_words)) > 0 else 0
+    
+    substr_len = longest_common_substring(q_words, t_words)
+    substr_score = substr_len / len(q_words) if len(q_words) > 0 else 0
+    
+    common_words = set(q_words) & set(t_words)
+    word_ratio = len(common_words) / len(q_words) if len(q_words) > 0 else 0
+    
+    # Trọng số: ưu tiên chuỗi liền kề
+    total_score = (substr_score * 0.5) + (lcs_score * 0.3) + (word_ratio * 0.2)
+    
+    return min(total_score, 1.0)
 
 
 def extract_video_id_from_filename(filename):
@@ -242,13 +286,11 @@ def extract_video_id_from_filename(filename):
             if match:
                 video_id = match.group(1)
                 print(f"📄 Đọc video ID từ file .txt: {video_id}")
-                # Xác minh video tồn tại
                 if verify_video_exists(video_id):
                     print(f"✅ Video tồn tại trên YouTube")
                     return video_id
                 else:
                     print(f"⚠️ Video ID {video_id} không tồn tại trên YouTube")
-                    print(f"💡 Kiểm tra lại link trong file {txt_file}")
                     return None
             
             # Tìm link YouTube đầy đủ
@@ -260,7 +302,7 @@ def extract_video_id_from_filename(filename):
                     print(f"✅ Video tồn tại trên YouTube")
                     return video_id
                 else:
-                    print(f"⚠️ Link YouTube không hợp lệ: {video_id}")
+                    print(f"⚠️ Link YouTube không hợp lệ")
                     return None
                     
         except Exception as e:
@@ -276,7 +318,6 @@ def extract_video_id_from_filename(filename):
     
     print(f"❌ KHÔNG TÌM THẤY VIDEO NÀO CHO: {filename}")
     print(f"💡 Tạo file {name}.txt chứa link YouTube chính xác")
-    print(f"💡 Hoặc kiểm tra lại tên file và kết nối mạng")
     return None
 
 
