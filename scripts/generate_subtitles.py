@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 YouTube Subtitle Generator - Faster Whisper
-Tự động tìm video ID từ tên file (DÙNG YT-DLP)
+Tự động tìm video ID từ tên file
+Hỗ trợ tất cả ngôn ngữ: Tiếng Việt, Tiếng Trung, Tiếng Anh, ...
 """
 
 import os
@@ -11,20 +12,17 @@ import glob
 import re
 import subprocess
 import argparse
-import time
 from pathlib import Path
 from datetime import datetime
 from difflib import SequenceMatcher
 
 # ===== KIỂM TRA VÀ CÀI YT-DLP =====
 def ensure_yt_dlp():
-    """Kiểm tra và cài yt-dlp nếu chưa có"""
     try:
         result = subprocess.run(['yt-dlp', '--version'], 
                                capture_output=True, timeout=5, text=True)
         if result.returncode == 0:
-            version = result.stdout.strip()
-            print(f"✅ yt-dlp version: {version}")
+            print(f"✅ yt-dlp version: {result.stdout.strip()}")
             return True
     except (subprocess.SubprocessError, FileNotFoundError):
         pass
@@ -67,11 +65,8 @@ except ImportError:
     from pypinyin import pinyin, Style
 
 
-# ===== TÌM VIDEO ID TỪ TÊN FILE (DÙNG YT-DLP) =====
+# ===== TÌM VIDEO ID TỪ TÊN FILE =====
 def search_video_id_from_filename(filename):
-    """
-    Tìm video ID bằng yt-dlp search
-    """
     name = Path(filename).stem
     search_query = clean_search_query(name)
     print(f"🔍 Tìm kiếm YouTube: '{search_query}'")
@@ -79,27 +74,27 @@ def search_video_id_from_filename(filename):
     try:
         cmd = [
             'yt-dlp',
-            f'ytsearch10:{search_query}',
+            f'ytsearch20:{search_query}',
             '--flat-playlist',
             '--print', '%(title)s|||%(id)s',
             '--no-warnings',
             '--no-playlist',
             '--no-check-certificates',
+            '--default-search', 'ytsearch',
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            '--extractor-args', 'youtube:skip=hls,dash,player_js',
-            '--ignore-errors'
+            '--extractor-args', 'youtube:skip=hls,dash,player_js,webpage',
+            '--ignore-errors',
+            '--retries', '5',
+            '--fragment-retries', '5'
         ]
         
         print(f"⏳ Đang tìm kiếm với yt-dlp...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        
-        if result.stdout:
-            print(f"📄 stdout: {result.stdout[:200]}")
-        if result.stderr:
-            print(f"📄 stderr: {result.stderr[:200]}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         
         if result.returncode != 0 or not result.stdout:
             print(f"❌ Không tìm thấy video nào (return code: {result.returncode})")
+            if result.stderr:
+                print(f"   Lỗi: {result.stderr[:200]}")
             return None
         
         lines = result.stdout.strip().split('\n')
@@ -135,7 +130,7 @@ def search_video_id_from_filename(filename):
             return None
             
     except subprocess.TimeoutExpired:
-        print("❌ Tìm kiếm quá thời gian (60s)")
+        print("❌ Tìm kiếm quá thời gian (90s)")
         return None
     except Exception as e:
         print(f"❌ Lỗi tìm kiếm: {e}")
@@ -143,7 +138,7 @@ def search_video_id_from_filename(filename):
 
 
 def clean_search_query(filename):
-    """Làm sạch tên file để tìm kiếm - Xóa emoji và ký tự đặc biệt"""
+    """Làm sạch tên file để tìm kiếm - GIỮ NGUYÊN NGÔN NGỮ"""
     name = Path(filename).stem
     
     # Xóa emoji
@@ -159,19 +154,14 @@ def clean_search_query(filename):
         "]+", flags=re.UNICODE)
     name = emoji_pattern.sub(r'', name)
     
-    # Loại bỏ số thứ tự
-    name = re.sub(r'^\d+[\s._-]+', '', name)
+    # GIỮ NGUYÊN CHỮ VÀ SỐ (KHÔNG XÓA KÝ TỰ ĐẶC BIỆT CỦA TIẾNG VIỆT/TRUNG)
+    # Chỉ xóa các ký tự điều khiển và khoảng trắng thừa
+    name = re.sub(r'\s+', ' ', name).strip()
     
-    # Loại bỏ các từ khóa không cần thiết
-    remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 'hd', 
-                    'official', 'music', 'song', 'lyric', 'cover', 'remix', 'live',
-                    'mv', 'ft', 'feat', 'featuring', '128k', '320k', 'podcast']
-    
-    for word in remove_words:
-        name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
-    
-    # Xóa ký tự đặc biệt
-    name = re.sub(r'[^\w\s]', ' ', name)
+    # Chỉ xóa các ký tự đặc biệt không cần thiết nhưng giữ lại dấu cách
+    # \u00C0-\u024F: ký tự có dấu của tiếng Việt và các ngôn ngữ châu Âu
+    # \u4E00-\u9FFF: ký tự tiếng Trung
+    name = re.sub(r'[^\w\s\u00C0-\u024F\u4E00-\u9FFF]', ' ', name)
     
     # Xóa khoảng trắng thừa
     name = re.sub(r'\s+', ' ', name).strip()
@@ -180,28 +170,43 @@ def clean_search_query(filename):
 
 
 def similarity_score(a, b):
-    """Tính độ tương đồng giữa 2 chuỗi"""
     a = a.lower()
     b = b.lower()
-    a = re.sub(r'[^\w\s]', ' ', a)
-    b = re.sub(r'[^\w\s]', ' ', b)
+    a = re.sub(r'[^\w\s\u00C0-\u024F\u4E00-\u9FFF]', ' ', a)
+    b = re.sub(r'[^\w\s\u00C0-\u024F\u4E00-\u9FFF]', ' ', b)
     return SequenceMatcher(None, a, b).ratio()
 
 
 def extract_video_id_from_filename(filename):
-    """Tự động tìm video ID từ tên file"""
+    """
+    Tự động tìm video ID từ tên file
+    Ưu tiên: 1. File .txt, 2. Tìm kiếm YouTube
+    """
     name = Path(filename).stem
+    folder = Path(filename).parent
     
-    # CÁCH 1: Tìm 11 ký tự
-    match = re.search(r'([a-zA-Z0-9_-]{11})', name)
-    if match:
-        video_id = match.group(1)
-        if not any(k in name.lower() for k in ['audio', 'video', 'subtitle', 'track']):
-            print(f"✅ Tìm thấy video ID trong tên: {video_id}")
-            return video_id
+    # CÁCH 1: ĐỌC TỪ FILE .TXT CÙNG TÊN
+    txt_file = folder / f"{name}.txt"
+    if txt_file.exists():
+        try:
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', content)
+            if match:
+                video_id = match.group(1)
+                print(f"✅ Đọc video ID từ file .txt: {video_id}")
+                return video_id
+            match = re.search(r'https?://(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})', content)
+            if match:
+                video_id = match.group(1)
+                print(f"✅ Đọc link YouTube từ file .txt: {video_id}")
+                return video_id
+        except Exception as e:
+            print(f"⚠️ Lỗi đọc file .txt: {e}")
     
     # CÁCH 2: Tìm kiếm trên YouTube
-    print(f"🔍 Không tìm thấy ID trong tên, tìm kiếm trên YouTube...")
+    print(f"🔍 Không có file .txt, tìm kiếm trên YouTube...")
+    print(f"📝 Tên file gốc: {name}")
     video_id = search_video_id_from_filename(filename)
     
     if video_id:
@@ -209,6 +214,7 @@ def extract_video_id_from_filename(filename):
         return video_id
     
     print(f"❌ Không thể tìm thấy video ID cho: {filename}")
+    print(f"💡 Tạo file {name}.txt chứa link YouTube để xử lý nhanh hơn")
     return None
 
 
@@ -232,8 +238,6 @@ def generate_subtitle(audio_path, output_path=None):
     
     if not video_id:
         print(f"❌ Không tìm thấy video ID cho: {audio_file.name}")
-        print(f"💡 Vui lòng đặt tên file chứa YouTube ID (11 ký tự)")
-        print(f"💡 Hoặc đảm bảo tên file có thể tìm kiếm trên YouTube")
         return None
     
     youtube_link = get_youtube_link(video_id)
