@@ -42,7 +42,7 @@ jobs:
         echo "image=ghcr.io/${{ github.repository_owner }}/subtitle-ai" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
         echo "✅ Image: ${{ steps.image.outputs.image }}"
     
-    # 👈 TẠO LOCK
+    # 👈 TẠO LOCK (CHỐNG XỬ LÝ TRÙNG)
     - name: Create processing lock
       env:
         FILE_NAME: ${{ github.event.client_payload.file_name }}
@@ -65,7 +65,7 @@ jobs:
         git add .processing/
         git diff --staged --quiet || (git commit -m "Lock: Processing ${LOCK_NAME}" && git push) || echo "Lock already exists"
     
-    # 👈 TẢI TỪ GOOGLE DRIVE
+    # 👈 TẢI TỪ GOOGLE DRIVE (NÂNG CẤP GDOWN)
     - name: Download from Google Drive
       id: download
       if: github.event.client_payload.drive_file_id
@@ -74,7 +74,13 @@ jobs:
         FILE_NAME: ${{ github.event.client_payload.file_name }}
         FILE_NAME_WITHOUT_EXT: ${{ github.event.client_payload.file_name_without_ext }}
       run: |
-        pip install gdown
+        # 👈 NÂNG CẤP GDOWN LÊN PHIÊN BẢN MỚI NHẤT
+        echo "⬆️ Upgrading gdown to latest version..."
+        pip install --upgrade gdown
+        
+        echo "📦 gdown version:"
+        gdown --version
+        
         mkdir -p data/audio
         
         if [ -n "$FILE_NAME" ]; then
@@ -87,8 +93,10 @@ jobs:
         echo "📁 File ID: $DRIVE_FILE_ID"
         echo "📄 File Name: $AUDIO_NAME"
         
+        # 👈 DÙNG --FUZZY ĐỂ TỰ ĐỘNG LẤY TÊN FILE
         gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${AUDIO_NAME}" --fuzzy
         
+        # Kiểm tra file đã tải
         if [ -f "data/audio/${AUDIO_NAME}" ]; then
           echo "✅ Downloaded: ${AUDIO_NAME}"
           echo "file_name=${AUDIO_NAME}" >> $GITHUB_OUTPUT
@@ -99,6 +107,9 @@ jobs:
             NAME_WITHOUT_EXT="${AUDIO_NAME%.*}"
             echo "name_without_ext=${NAME_WITHOUT_EXT}" >> $GITHUB_OUTPUT
           fi
+          
+          # Hiển thị thông tin file
+          echo "📊 File size: $(du -h data/audio/${AUDIO_NAME} | cut -f1)"
         else
           echo "❌ Download failed!"
           exit 1
@@ -151,6 +162,7 @@ jobs:
         
         mkdir -p output
         
+        # 👈 CHẠY SCRIPT TRONG CONTAINER
         docker run --rm \
           -v $(pwd):/app \
           -w /app \
@@ -171,6 +183,7 @@ jobs:
           echo "✅ Processing completed"
           echo "has_audio=true" >> $GITHUB_OUTPUT
           
+          # Đọc YouTube link từ file info
           if [ -f "output/${NAME_WITHOUT_EXT}.info.txt" ]; then
             YOUTUBE_LINK=$(grep "YouTube Link:" "output/${NAME_WITHOUT_EXT}.info.txt" | cut -d' ' -f3- || echo "")
             VIDEO_ID=$(grep "Video ID:" "output/${NAME_WITHOUT_EXT}.info.txt" | cut -d' ' -f3- || echo "")
@@ -210,6 +223,7 @@ jobs:
           exit 1
         fi
         
+        # Kiểm tra token
         if [ -z "$GIST_TOKEN" ] && [ -z "$GH_TOKEN" ]; then
           echo "❌ No GIST_TOKEN or GH_TOKEN found!"
           exit 1
