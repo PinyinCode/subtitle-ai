@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Cài FFmpeg + Git + các tool cần thiết
 RUN apt-get update && \
