@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Cài FFmpeg + Git + các tool cần thiết
+# Cài system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -10,32 +10,44 @@ RUN apt-get update && \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip
 
-RUN pip install --no-cache-dir yt-dlp
-
+# 👈 CÀI TẤT CẢ PACKAGES TRONG 1 LẦN (QUAN TRỌNG)
 RUN pip install --no-cache-dir \
+    yt-dlp \
     faster-whisper \
     deep-translator \
     pypinyin \
     requests \
     PyGithub \
     gdown \
-    youtube-search-python
+    youtube-search-python \
+    google-api-python-client \
+    google-auth-httplib2 \
+    google-auth-oauthlib
 
-RUN python -c "from faster_whisper import WhisperModel; WhisperModel('medium', device='cpu', compute_type='int8')"
+# 👈 VERIFY TẤT CẢ PACKAGES ĐÃ CÀI
+RUN python -c "import faster_whisper; import deep_translator; import pypinyin; import youtube_search; print('✅ All packages installed successfully')"
+
+# Download Whisper model (cache để chạy nhanh hơn)
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"
 
 WORKDIR /app
 
+# Copy scripts
 COPY scripts/ ./scripts/
-COPY data/ ./data/
-COPY output/ ./output/
 
+# Tạo thư mục cần thiết
 RUN mkdir -p data/audio output
 
-# 👈 VERIFY ĐƠN GIẢN (BỎ YOUTUBE_SEARCH)
-RUN python -c "from faster_whisper import WhisperModel; print('✅ Faster-Whisper OK')" && \
-    ffmpeg -version | head -1 && \
-    yt-dlp --version
+# Copy data (nếu có)
+COPY data/ ./data/ 2>/dev/null || true
+COPY output/ ./output/ 2>/dev/null || true
 
-CMD ["python", "scripts/generate_subtitles.py", "--latest"]
+# 👈 VERIFY LẦN CUỐI
+RUN python -c "from youtube_search import YoutubeSearch; print('✅ YoutubeSearch ready')" && \
+    python -c "from faster_whisper import WhisperModel; print('✅ Faster-Whisper ready')"
+
+ENTRYPOINT ["python", "scripts/generate_subtitles.py"]
+CMD ["--latest"]
