@@ -86,14 +86,16 @@ def search_video_id_from_filename(filename):
     print(f"🔍 Tìm kiếm YouTube: '{search_query}'")
     
     try:
-        # 👈 DÙNG YT-DLP ĐỂ TÌM KIẾM
+        # 👈 DÙNG YT-DLP ĐỂ TÌM KIẾM VỚI USER-AGENT
         cmd = [
             'yt-dlp',
             f'ytsearch10:{search_query}',
             '--print', '%(title)s|||%(id)s',
             '--no-warnings',
             '--no-playlist',
-            '--no-check-certificates'
+            '--no-check-certificates',
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            '--extractor-args', 'youtube:skip=hls,dash,player_js'
         ]
         
         print(f"⏳ Đang tìm kiếm với yt-dlp...")
@@ -105,7 +107,7 @@ def search_video_id_from_filename(filename):
                 # Chỉ hiển thị lỗi đầu tiên
                 error_lines = result.stderr.strip().split('\n')
                 if error_lines:
-                    print(f"   Lỗi: {error_lines[0][:200]}")
+                    print(f"   Lỗi: {error_lines[0][:300]}")
             return None
         
         # Phân tích kết quả
