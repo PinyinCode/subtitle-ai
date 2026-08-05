@@ -4,4 +4,4 @@ pypinyin
 gdown
 yt-dlp
 requests
-youtube-search-python
+PyGithub
