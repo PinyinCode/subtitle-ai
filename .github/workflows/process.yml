@@ -33,6 +33,16 @@ jobs:
         echo "image=ghcr.io/${{ github.repository_owner }}/subtitle-ai" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
         echo "✅ Image: ${{ steps.image.outputs.image }}"
     
+    # 👈 HIỂN THỊ PAYLOAD NHẬN ĐƯỢC
+    - name: Show received payload
+      run: |
+        echo "📦 Event: ${{ github.event.action }}"
+        echo "📁 File ID: ${{ github.event.client_payload.drive_file_id }}"
+        echo "📄 File Name: ${{ github.event.client_payload.file_name }}"
+        echo "🎯 Video ID: ${{ github.event.client_payload.video_id }}"
+        echo "🔍 Search Name: ${{ github.event.client_payload.search_name }}"
+        echo "⏰ Timestamp: ${{ github.event.client_payload.timestamp }}"
+    
     # 👈 KIỂM TRA TOKEN
     - name: Debug - Check HF_TOKEN on runner
       run: |
@@ -53,6 +63,10 @@ jobs:
       run: |
         mkdir -p .processing
         LOCK_NAME="${FILE_NAME:-$VIDEO_ID}"
+        if [ -z "$LOCK_NAME" ]; then
+          echo "⚠️ No file name or video ID, skipping lock"
+          exit 0
+        fi
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" > ".processing/${LOCK_NAME}.lock"
         git config user.name "Actions"
         git config user.email "actions@github.com"
@@ -75,7 +89,7 @@ jobs:
         if [ -n "$FILE_NAME" ]; then
           AUDIO_NAME="$FILE_NAME"
         else
-          AUDIO_NAME="${VIDEO_ID}.m4a"
+          AUDIO_NAME="${VIDEO_ID:-unknown}.m4a"
         fi
         
         echo "📥 Downloading from Google Drive..."
@@ -104,12 +118,14 @@ jobs:
         docker pull ${{ steps.image.outputs.image }}:latest || true
         echo "✅ Docker image ready"
     
-    # 👈 XỬ LÝ AUDIO VỚI AI (GIỮ TÊN GỐC)
+    # 👈 XỬ LÝ AUDIO VỚI AI (HỖ TRỢ VIDEO_ID TỪ PAYLOAD)
     - name: Process audio with AI
       id: process
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         FILE_NAME: ${{ steps.download.outputs.file_name }}
+        VIDEO_ID_OVERRIDE: ${{ github.event.client_payload.video_id }}  # 👈 THÊM
+        SEARCH_NAME: ${{ github.event.client_payload.search_name }}     # 👈 THÊM
       run: |
         # 👈 TÌM FILE AUDIO (HỖ TRỢ NHIỀU ĐỊNH DẠNG)
         if [ -n "$FILE_NAME" ]; then
@@ -130,6 +146,9 @@ jobs:
         
         echo "🎬 Processing: $FILE_NAME"
         echo "📝 Output name: $NAME_WITHOUT_EXT"
+        echo "🎯 Video ID from payload: $VIDEO_ID_OVERRIDE"
+        echo "🔍 Search name: $SEARCH_NAME"
+        
         echo "video_id=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
         echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
         echo "name_without_ext=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
@@ -138,32 +157,50 @@ jobs:
         
         echo "📁 Running Docker container with HF_TOKEN..."
         
-        # 👈 CHẠY DOCKER VỚI TÊN GỐC
+        # 👈 CHẠY DOCKER VỚI VIDEO_ID TỪ PAYLOAD
         docker run --rm \
           -v $(pwd):/app \
           -w /app \
           -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
           -e ORIGINAL_FILENAME="$FILE_NAME" \
+          -e VIDEO_ID_OVERRIDE="$VIDEO_ID_OVERRIDE" \
+          -e SEARCH_NAME="$SEARCH_NAME" \
           ${{ steps.image.outputs.image }}:latest \
           bash -c "
             echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
             echo '✅ Token prefix: '\${HF_TOKEN:0:10}
-            python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'
+            echo '🎯 VIDEO_ID_OVERRIDE: $VIDEO_ID_OVERRIDE'
+            echo '🔍 SEARCH_NAME: $SEARCH_NAME'
+            
+            # 👈 NẾU CÓ VIDEO_ID_OVERRIDE, DÙNG --video-id
+            if [ -n \"$VIDEO_ID_OVERRIDE\" ]; then
+              echo '✅ Sử dụng Video ID từ payload: $VIDEO_ID_OVERRIDE'
+              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --video-id '$VIDEO_ID_OVERRIDE'
+            else
+              echo '🔍 Không có Video ID, tìm kiếm theo tên file hoặc SEARCH_NAME'
+              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'
+            fi
           "
         
         echo "📁 Checking output files:"
         ls -la output/
         
-        # 👈 KIỂM TRA FILE VTT (TÊN GỐC)
-        if [ -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
-          echo "✅ Processing completed"
+        # 👈 KIỂM TRA FILE VTT (TÊN GỐC HOẶC TỪ VIDEO_ID)
+        VTT_FILE=$(find output -name "*.vtt" | head -1)
+        if [ -f "$VTT_FILE" ]; then
+          VTT_NAME=$(basename "$VTT_FILE" .vtt)
+          echo "✅ Processing completed: $VTT_NAME"
           echo "has_audio=true" >> $GITHUB_OUTPUT
+          echo "name_without_ext=$VTT_NAME" >> $GITHUB_OUTPUT
           
           # 👈 ĐỌC YOUTUBE LINK TỪ FILE INFO
-          if [ -f "output/${NAME_WITHOUT_EXT}.info.txt" ]; then
-            YOUTUBE_LINK=$(grep "YouTube Link:" "output/${NAME_WITHOUT_EXT}.info.txt" | cut -d' ' -f3-)
+          if [ -f "output/${VTT_NAME}.info.txt" ]; then
+            YOUTUBE_LINK=$(grep "YouTube Link:" "output/${VTT_NAME}.info.txt" | cut -d' ' -f3- || echo "")
+            VIDEO_ID=$(grep "Video ID:" "output/${VTT_NAME}.info.txt" | cut -d' ' -f3- || echo "")
             echo "🔗 YouTube: $YOUTUBE_LINK"
+            echo "🎯 Video ID: $VIDEO_ID"
             echo "youtube_link=$YOUTUBE_LINK" >> $GITHUB_OUTPUT
+            echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
           fi
         else
           echo "❌ VTT file NOT created!"
@@ -196,7 +233,7 @@ jobs:
           exit 1
         fi
         
-        # Chạy script upload (đã sửa để nhận YOUTUBE_LINK)
+        # Chạy script upload
         python scripts/push_to_gist.py
         
         if [ $? -eq 0 ]; then
@@ -229,7 +266,6 @@ jobs:
           exit 0
         fi
         
-        # Script xóa (giữ nguyên)
         cat > /tmp/delete_oauth.py << 'EOF'
         import os, sys
         from google.oauth2.credentials import Credentials
@@ -297,11 +333,13 @@ jobs:
         VIDEO_ID: ${{ steps.process.outputs.video_id }}
       run: |
         LOCK_NAME="${FILE_NAME:-$VIDEO_ID}"
-        rm -f ".processing/${LOCK_NAME}.lock"
-        git config user.name "Actions"
-        git config user.email "actions@github.com"
-        git add .processing/
-        git diff --staged --quiet || (git commit -m "Unlock: ${LOCK_NAME}" && git push) || echo "No lock to remove"
+        if [ -n "$LOCK_NAME" ]; then
+          rm -f ".processing/${LOCK_NAME}.lock"
+          git config user.name "Actions"
+          git config user.email "actions@github.com"
+          git add .processing/
+          git diff --staged --quiet || (git commit -m "Unlock: ${LOCK_NAME}" && git push) || echo "No lock to remove"
+        fi
     
     - name: Cleanup
       if: always()
