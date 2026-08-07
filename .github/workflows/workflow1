@@ -4,11 +4,14 @@ on:
   push:
     paths:
       - data/audio/*.m4a
+      - data/audio/*.mp3
+      - data/audio/*.wav
   workflow_dispatch:
   repository_dispatch:
     types:
       - process_audio
       - process_drive_audio
+      - new_drive_file
 
 permissions:
   contents: write
@@ -23,7 +26,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    # 👈 KIỂM TRA TOKEN TRÊN RUNNER
+    # 👈 ĐỊNH NGHĨA TÊN IMAGE (CHỮ THƯỜNG)
+    - name: Set image name
+      id: image
+      run: |
+        echo "image=ghcr.io/${{ github.repository_owner }}/subtitle-ai" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
+        echo "✅ Image: ${{ steps.image.outputs.image }}"
+    
+    # 👈 KIỂM TRA TOKEN
     - name: Debug - Check HF_TOKEN on runner
       run: |
         if [ -n "$HF_TOKEN" ]; then
@@ -35,24 +45,48 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
     
-    # 👈 NẾU LÀ DRIVE → TẢI FILE
-    - name: Download from Google Drive (if drive event)
-      if: github.event.action == 'process_drive_audio' || github.event.client_payload.drive_file_id
+    # 👈 TẠO LOCK (DÙNG TÊN FILE GỐC HOẶC VIDEO_ID)
+    - name: Create processing lock
+      env:
+        FILE_NAME: ${{ github.event.client_payload.file_name }}
+        VIDEO_ID: ${{ github.event.client_payload.video_id }}
+      run: |
+        mkdir -p .processing
+        LOCK_NAME="${FILE_NAME:-$VIDEO_ID}"
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" > ".processing/${LOCK_NAME}.lock"
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add .processing/
+        git diff --staged --quiet || (git commit -m "Lock: Processing ${LOCK_NAME}" && git push) || echo "Lock already exists"
+    
+    # 👈 TẢI TỪ GOOGLE DRIVE (GIỮ TÊN GỐC)
+    - name: Download from Google Drive
+      id: download
+      if: github.event.action == 'process_drive_audio' || github.event.action == 'new_drive_file' || github.event.client_payload.drive_file_id
       env:
         DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
+        FILE_NAME: ${{ github.event.client_payload.file_name }}
         VIDEO_ID: ${{ github.event.client_payload.video_id }}
       run: |
         pip install gdown
         mkdir -p data/audio
         
+        # 👈 ƯU TIÊN DÙNG TÊN GỐC, NẾU KHÔNG CÓ THÌ DÙNG VIDEO_ID
+        if [ -n "$FILE_NAME" ]; then
+          AUDIO_NAME="$FILE_NAME"
+        else
+          AUDIO_NAME="${VIDEO_ID}.m4a"
+        fi
+        
         echo "📥 Downloading from Google Drive..."
         echo "File ID: $DRIVE_FILE_ID"
-        echo "Video ID: $VIDEO_ID"
+        echo "File Name: $AUDIO_NAME"
         
-        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${VIDEO_ID}.m4a"
+        gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${AUDIO_NAME}"
         
-        if [ -f "data/audio/${VIDEO_ID}.m4a" ]; then
-          echo "✅ Downloaded: ${VIDEO_ID}.m4a"
+        if [ -f "data/audio/${AUDIO_NAME}" ]; then
+          echo "✅ Downloaded: ${AUDIO_NAME}"
+          echo "file_name=${AUDIO_NAME}" >> $GITHUB_OUTPUT
         else
           echo "❌ Download failed!"
           exit 1
@@ -67,73 +101,214 @@ jobs:
     
     - name: Pull AI Docker image
       run: |
-        docker pull ghcr.io/pinyincode/subtitle-ai:latest || true
+        docker pull ${{ steps.image.outputs.image }}:latest || true
         echo "✅ Docker image ready"
     
+    # 👈 XỬ LÝ AUDIO VỚI AI (GIỮ TÊN GỐC)
     - name: Process audio with AI
       id: process
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        FILE_NAME: ${{ steps.download.outputs.file_name }}
       run: |
-        AUDIO_FILE=$(find data/audio -name "*.m4a" -type f | head -1)
+        # 👈 TÌM FILE AUDIO (HỖ TRỢ NHIỀU ĐỊNH DẠNG)
+        if [ -n "$FILE_NAME" ]; then
+          AUDIO_FILE="data/audio/${FILE_NAME}"
+        else
+          AUDIO_FILE=$(find data/audio -type f \( -name "*.m4a" -o -name "*.mp3" -o -name "*.wav" \) | head -1)
+        fi
         
-        if [ -n "$AUDIO_FILE" ]; then
-          VIDEO_ID=$(basename "$AUDIO_FILE" .m4a)
-          echo "🎬 Processing: $VIDEO_ID"
-          echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+        if [ -z "$AUDIO_FILE" ] || [ ! -f "$AUDIO_FILE" ]; then
+          echo "❌ No audio file found!"
+          echo "has_audio=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # 👈 LẤY TÊN GỐC (KHÔNG EXTENSION)
+        FILE_NAME=$(basename "$AUDIO_FILE")
+        NAME_WITHOUT_EXT="${FILE_NAME%.*}"
+        
+        echo "🎬 Processing: $FILE_NAME"
+        echo "📝 Output name: $NAME_WITHOUT_EXT"
+        echo "video_id=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
+        echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
+        echo "name_without_ext=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
+        
+        mkdir -p output
+        
+        echo "📁 Running Docker container with HF_TOKEN..."
+        
+        # 👈 CHẠY DOCKER VỚI TÊN GỐC
+        docker run --rm \
+          -v $(pwd):/app \
+          -w /app \
+          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+          -e ORIGINAL_FILENAME="$FILE_NAME" \
+          ${{ steps.image.outputs.image }}:latest \
+          bash -c "
+            echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
+            echo '✅ Token prefix: '\${HF_TOKEN:0:10}
+            python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'
+          "
+        
+        echo "📁 Checking output files:"
+        ls -la output/
+        
+        # 👈 KIỂM TRA FILE VTT (TÊN GỐC)
+        if [ -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
+          echo "✅ Processing completed"
+          echo "has_audio=true" >> $GITHUB_OUTPUT
           
-          mkdir -p output
-          
-          echo "📁 Running Docker container with HF_TOKEN..."
-          
-          # 👈 TRUYỀN HF_TOKEN VÀO CONTAINER
-          docker run --rm \
-            -v $(pwd):/app \
-            -w /app \
-            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
-            ghcr.io/pinyincode/subtitle-ai:latest \
-            bash -c "
-              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
-              echo '✅ Token prefix: '\${HF_TOKEN:0:10}
-              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --output '/app/output/${VIDEO_ID}.vtt'
-            "
-          
-          echo "📁 Checking output files:"
-          ls -la output/
-          
-          if [ -f "output/${VIDEO_ID}.vtt" ]; then
-            echo "✅ Processing completed"
-            echo "has_audio=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ VTT file NOT created!"
-            echo "has_audio=false" >> $GITHUB_OUTPUT
-            exit 1
+          # 👈 ĐỌC YOUTUBE LINK TỪ FILE INFO
+          if [ -f "output/${NAME_WITHOUT_EXT}.info.txt" ]; then
+            YOUTUBE_LINK=$(grep "YouTube Link:" "output/${NAME_WITHOUT_EXT}.info.txt" | cut -d' ' -f3-)
+            echo "🔗 YouTube: $YOUTUBE_LINK"
+            echo "youtube_link=$YOUTUBE_LINK" >> $GITHUB_OUTPUT
           fi
         else
-          echo "ℹ️ No audio file found"
+          echo "❌ VTT file NOT created!"
           echo "has_audio=false" >> $GITHUB_OUTPUT
+          exit 1
         fi
     
+    # ===== UPLOAD SUBTITLE TO GIST =====
     - name: Upload subtitle to Gist
+      id: upload_gist
       if: steps.process.outputs.has_audio == 'true'
       env:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         VIDEO_ID: ${{ steps.process.outputs.video_id }}
+        FILE_NAME: ${{ steps.process.outputs.file_name }}
+        NAME_WITHOUT_EXT: ${{ steps.process.outputs.name_without_ext }}
+        YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
       run: |
         echo "📤 Uploading subtitle to Gist..."
         echo "📁 Files in output:"
         ls -la output/
         echo "🎯 Video ID: $VIDEO_ID"
+        echo "📝 Tên gốc: $FILE_NAME"
+        echo "🔗 YouTube: $YOUTUBE_LINK"
+        
+        # 👈 KIỂM TRA FILE VTT
+        if [ ! -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
+          echo "❌ VTT file not found!"
+          exit 1
+        fi
+        
+        # Chạy script upload (đã sửa để nhận YOUTUBE_LINK)
         python scripts/push_to_gist.py
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Upload to Gist successful!"
+          echo "gist_uploaded=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Upload to Gist FAILED!"
+          echo "gist_uploaded=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+    
+    # ===== XÓA FILE TRÊN GOOGLE DRIVE =====
+    - name: Delete file from Google Drive (OAuth)
+      if: |
+        steps.upload_gist.outputs.gist_uploaded == 'true' && 
+        (github.event.action == 'process_drive_audio' || github.event.action == 'new_drive_file')
+      env:
+        DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
+        OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+        OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+        OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}
+      run: |
+        echo "🗑️ Deleting file from Google Drive using OAuth..."
+        echo "📹 Video ID: $VIDEO_ID"
+        echo "📎 File ID: $DRIVE_FILE_ID"
+        
+        if [ -z "$OAUTH_CLIENT_ID" ] || [ -z "$OAUTH_CLIENT_SECRET" ] || [ -z "$OAUTH_REFRESH_TOKEN" ]; then
+          echo "⚠️ OAuth credentials not configured, skipping delete"
+          exit 0
+        fi
+        
+        # Script xóa (giữ nguyên)
+        cat > /tmp/delete_oauth.py << 'EOF'
+        import os, sys
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+
+        def delete_file_with_oauth(file_id, client_id, client_secret, refresh_token):
+            try:
+                creds = Credentials(
+                    None,
+                    refresh_token=refresh_token,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    token_uri='https://oauth2.googleapis.com/token'
+                )
+                creds.refresh(Request())
+                service = build('drive', 'v3', credentials=creds)
+                print(f"🗑️ Deleting file: {file_id}")
+                service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+                print(f"✅ File {file_id} deleted successfully!")
+                return True
+            except HttpError as error:
+                if error.resp.status == 404:
+                    print(f"⚠️ File {file_id} not found (already deleted)")
+                    return True
+                print(f"❌ Google API error: {error}")
+                return False
+            except Exception as error:
+                print(f"❌ Unexpected error: {error}")
+                return False
+
+        def main():
+            file_id = os.getenv('DRIVE_FILE_ID')
+            client_id = os.getenv('OAUTH_CLIENT_ID')
+            client_secret = os.getenv('OAUTH_CLIENT_SECRET')
+            refresh_token = os.getenv('OAUTH_REFRESH_TOKEN')
+            
+            if not all([file_id, client_id, client_secret, refresh_token]):
+                print("❌ Missing OAuth credentials")
+                sys.exit(1)
+            
+            success = delete_file_with_oauth(file_id, client_id, client_secret, refresh_token)
+            sys.exit(0 if success else 1)
+
+        if __name__ == "__main__":
+            main()
+        EOF
+        
+        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+        python3 /tmp/delete_oauth.py
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ File deleted successfully from Google Drive!"
+        else
+          echo "❌ Failed to delete file!"
+          exit 1
+        fi
+    
+    # 👈 XÓA LOCK
+    - name: Remove processing lock
+      if: always()
+      env:
+        FILE_NAME: ${{ steps.process.outputs.file_name }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}
+      run: |
+        LOCK_NAME="${FILE_NAME:-$VIDEO_ID}"
+        rm -f ".processing/${LOCK_NAME}.lock"
+        git config user.name "Actions"
+        git config user.email "actions@github.com"
+        git add .processing/
+        git diff --staged --quiet || (git commit -m "Unlock: ${LOCK_NAME}" && git push) || echo "No lock to remove"
     
     - name: Cleanup
       if: always()
       run: |
-        rm -f data/audio/*.m4a
+        rm -f data/audio/*.m4a data/audio/*.mp3 data/audio/*.wav 2>/dev/null || true
         touch data/audio/.gitkeep
-        rm -f output/*.vtt
-        rm -f output/*_summary.json
+        rm -f output/*.vtt output/*_summary.json output/*.info.txt 2>/dev/null || true
         touch output/.gitkeep
         echo "✅ Cleaned up"
         
