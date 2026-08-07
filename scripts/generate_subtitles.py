@@ -63,21 +63,22 @@ except ImportError:
 
 
 # ============================================================
-# HÀM LÀM SẠCH TÊN (GIỐNG NHƯ LÚC TÌM KIẾM YOUTUBE)
+# HÀM LÀM SẠCH TÊN (GIỮ NGUYÊN TIẾNG TRUNG, TIẾNG VIỆT)
 # ============================================================
 def clean_filename_for_file(filename):
     """
     Làm sạch tên file để dùng làm tên file
-    - GIỮ NGUYÊN nội dung
-    - Chỉ XÓA ký tự đặc biệt
+    - GIỮ NGUYÊN tiếng Trung, tiếng Việt, tiếng Anh
+    - Chỉ XÓA ký tự đặc biệt: 【】《》? , . - _ ( ) [ ] { } ...
+    - Giữ nguyên dấu tiếng Việt (ă, â, ê, ơ, ...)
+    - Giữ nguyên tiếng Trung (汉字)
     - Không dịch, không thay đổi từ
-    - Giống như lúc tìm kiếm trên YouTube
     """
     name = Path(filename).stem
     
-    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT: [] () {} + . , - _ / \ | ...
-    # (Giống như trong clean_search_query)
-    name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
+    # XÓA KÝ TỰ ĐẶC BIỆT: 【】《》? , . - _ ( ) [ ] { } ...
+    name = re.sub(r'[【】《》?.,!@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
+    name = re.sub(r'[\(\)\[\]\{\}]', ' ', name)
     
     # Xóa emoji
     emoji_pattern = re.compile("["
@@ -101,9 +102,9 @@ def clean_filename_for_file(filename):
     # Xóa khoảng trắng thừa
     name = re.sub(r'\s+', ' ', name).strip()
     
-    # Giới hạn độ dài (tối đa 60 ký tự để tránh tên quá dài)
-    if len(name) > 60:
-        name = name[:60]
+    # Giới hạn độ dài (tối đa 100 ký tự)
+    if len(name) > 100:
+        name = name[:100]
     
     # Nếu tên rỗng, dùng video_id làm fallback
     if not name:
@@ -192,11 +193,13 @@ def search_video_id_from_filename(filename):
 
 def clean_search_query(filename):
     """
-    Làm sạch tên file - XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT (KỂ CẢ DẤU GẠCH NGANG)
+    Làm sạch tên file để tìm kiếm YouTube
+    - XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT
+    - Giữ nguyên chữ cái, số, dấu tiếng Việt, tiếng Trung
     """
     name = Path(filename).stem
     
-    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT: [] () {} + . , - _ / \ | ...
+    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT
     name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
     
     # Xóa emoji
@@ -215,7 +218,6 @@ def clean_search_query(filename):
     # Xóa các từ khóa không cần thiết
     remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 
                     'official', '128k', '320k', 'podcast']
-    
     for word in remove_words:
         name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
     
@@ -357,7 +359,7 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     youtube_link = get_youtube_link(video_id)
     print(f"🔗 YouTube: {youtube_link}")
     
-    # 👈 LÀM SẠCH TÊN (GIỐNG NHƯ LÚC TÌM KIẾM)
+    # LÀM SẠCH TÊN (GIỮ NGUYÊN TIẾNG TRUNG, TIẾNG VIỆT)
     original_name = audio_file.stem
     clean_name = clean_filename_for_file(original_name)
     
@@ -559,7 +561,7 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
             f.write(f"Language: {detected_lang}\n")
         print(f"💾 Saved info to: {info_file}")
     
-    # Xuất env (vẫn dùng video_id cho workflow)
+    # Xuất env
     with open('video_id.env', 'w', encoding='utf-8') as f:
         f.write(f"VIDEO_ID={video_id}\n")
         f.write(f"YOUTUBE_LINK={youtube_link}\n")
