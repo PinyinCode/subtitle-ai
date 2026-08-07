@@ -561,12 +561,25 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
             f.write(f"Language: {detected_lang}\n")
         print(f"💾 Saved info to: {info_file}")
     
-    # Xuất env
+    # ============================================================
+    # XUẤT ENV AN TOÀN (CÓ DẤU NGOẶC KÉP)
+    # ============================================================
+    def escape_for_bash(value):
+        if not value:
+            return ''
+        value = value.replace('\\', '\\\\')
+        value = value.replace('"', '\\"')
+        value = value.replace('$', '\\$')
+        value = value.replace('`', '\\`')
+        value = value.replace('\n', ' ')
+        return value
+    
     with open('video_id.env', 'w', encoding='utf-8') as f:
-        f.write(f"VIDEO_ID={video_id}\n")
-        f.write(f"YOUTUBE_LINK={youtube_link}\n")
-        f.write(f"CLEAN_NAME={clean_name}\n")
-        f.write(f"ORIGINAL_FILENAME={original_name}\n")
+        f.write(f'VIDEO_ID="{video_id}"\n')
+        f.write(f'YOUTUBE_LINK="{youtube_link}"\n')
+        f.write(f'CLEAN_NAME="{clean_name}"\n')
+        f.write(f'ORIGINAL_FILENAME="{escape_for_bash(original_name)}"\n')
+    print(f"💾 Saved env to: video_id.env")
     
     print(f"\n{'='*50}")
     print(f"✅ COMPLETE!")
