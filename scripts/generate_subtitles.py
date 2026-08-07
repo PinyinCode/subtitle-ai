@@ -441,17 +441,17 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # LƯU FILE
-    print(f"\n💾 Saving to: {output_file}")
+    # LƯU FILE VTT
+    print(f"\n💾 Saving VTT to: {output_file}")
     vtt_content = '\n'.join(vtt_lines)
     
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(vtt_content)
     
     if output_file.exists():
-        print(f"✅ File written! Size: {output_file.stat().st_size} bytes")
+        print(f"✅ VTT file written! Size: {output_file.stat().st_size} bytes")
     
-    # Lưu summary
+    # LƯU SUMMARY
     summary = {
         'video_id': video_id,
         'youtube_link': youtube_link,
@@ -467,8 +467,30 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     summary_file = output_file.parent / f"{output_filename}_summary.json"
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
+    print(f"💾 Saved summary to: {summary_file}")
     
-    # Lưu info
+    # ============================================================
+    # 👈 THÊM PHẦN NÀY: LƯU METADATA (FILE THỨ 3)
+    # ============================================================
+    metadata = {
+        'video_id': video_id,
+        'youtube_link': youtube_link,
+        'language': detected_lang,
+        'title': original_name,
+        'duration': segment_list[-1]['end'] if segment_list else 0,
+        'segments': len(segment_list),
+        'generated_at': datetime.now().isoformat()
+    }
+    
+    metadata_file = output_file.parent / f"{output_filename}.metadata.json"
+    with open(metadata_file, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    print(f"💾 Saved metadata to: {metadata_file}")
+    # ============================================================
+    # 👈 KẾT THÚC PHẦN THÊM
+    # ============================================================
+    
+    # LƯU INFO (FILE THỨ 4)
     if youtube_link:
         info_file = output_file.parent / f"{output_filename}.info.txt"
         with open(info_file, 'w', encoding='utf-8') as f:
@@ -495,7 +517,6 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     print(f"{'='*50}\n")
     
     return str(output_file)
-
 
 # ===== MAIN =====
 def main():
