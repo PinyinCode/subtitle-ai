@@ -120,7 +120,7 @@ jobs:
         docker pull ${{ steps.image.outputs.image }}:latest || true
         echo "✅ Docker image ready"
     
-    # 👈 XỬ LÝ AUDIO VỚI AI (HỖ TRỢ VIDEO_ID TỪ PAYLOAD)
+    # 👈 XỬ LÝ AUDIO VỚI AI
     - name: Process audio with AI
       id: process
       env:
@@ -160,9 +160,8 @@ jobs:
         
         echo "📁 Running Docker container with HF_TOKEN..."
         
-        # 👈 QUYẾT ĐỊNH CÁCH GỌI SCRIPT DỰA TRÊN HAS_VIDEO_ID
+        # 👈 QUYẾT ĐỊNH CÁCH GỌI SCRIPT
         if [ -n "$VIDEO_ID_OVERRIDE" ] && [ "$HAS_VIDEO_ID" = "true" ]; then
-          # 👈 CÓ VIDEO ID TỪ PAYLOAD → DÙNG --video-id (KHÔNG TÌM KIẾM)
           echo "✅ Sử dụng Video ID từ payload: $VIDEO_ID_OVERRIDE"
           echo "📌 KHÔNG tìm kiếm trên YouTube"
           
@@ -178,7 +177,6 @@ jobs:
               python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --video-id '$VIDEO_ID_OVERRIDE'
             "
         else
-          # 👈 KHÔNG CÓ VIDEO ID → TÌM KIẾM TRÊN YOUTUBE
           echo "🔍 Không có Video ID, tìm kiếm trên YouTube theo tên file"
           
           docker run --rm \
@@ -196,13 +194,42 @@ jobs:
         echo "📁 Checking output files:"
         ls -la output/
         
-        # 👈 ĐỌC VIDEO_ID VÀ CLEAN_NAME TỪ video_id.env
+        # 👈 ĐỌC CLEAN_NAME TỪ video_id.env (AN TOÀN - KHÔNG DÙNG SOURCE)
         if [ -f "video_id.env" ]; then
-          echo "📄 Reading video_id.env..."
-          cat video_id.env
-          source video_id.env
-          echo "CLEAN_NAME from env: $CLEAN_NAME"
-          echo "VIDEO_ID from env: $VIDEO_ID"
+          echo "📄 Reading video_id.env (safe)..."
+          
+          # 👈 Đọc từng dòng an toàn
+          while IFS= read -r line || [ -n "$line" ]; do
+            # Bỏ qua dòng trống và dòng comment
+            [[ -z "$line" || "$line" =~ ^# ]] && continue
+            # Lấy tên biến và giá trị
+            if [[ "$line" =~ ^([A-Z_]+)=\"?(.*)\"?$ ]]; then
+              var_name="${BASH_REMATCH[1]}"
+              var_value="${BASH_REMATCH[2]}"
+              # Loại bỏ dấu ngoặc kép thừa
+              var_value="${var_value%\"}"
+              var_value="${var_value#\"}"
+              # Gán biến
+              declare "$var_name=$var_value"
+              echo "✅ Set $var_name"
+            fi
+          done < video_id.env
+          
+          # 👈 Xuất ra GITHUB_OUTPUT
+          if [ -n "$CLEAN_NAME" ]; then
+            echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
+            echo "✅ CLEAN_NAME: $CLEAN_NAME"
+          fi
+          if [ -n "$VIDEO_ID" ]; then
+            echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+            echo "✅ VIDEO_ID: $VIDEO_ID"
+          fi
+          if [ -n "$YOUTUBE_LINK" ]; then
+            echo "youtube_link=$YOUTUBE_LINK" >> $GITHUB_OUTPUT
+            echo "✅ YOUTUBE_LINK: $YOUTUBE_LINK"
+          fi
+        else
+          echo "⚠️ video_id.env not found"
         fi
         
         # 👈 KIỂM TRA FILE VTT
@@ -211,24 +238,11 @@ jobs:
           VTT_NAME=$(basename "$VTT_FILE" .vtt)
           echo "✅ Processing completed: $VTT_NAME"
           echo "has_audio=true" >> $GITHUB_OUTPUT
-          
-          # 👈 NẾU CLEAN_NAME CÓ TRONG ENV, DÙNG NÓ
-          if [ -n "$CLEAN_NAME" ]; then
-            echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
-          else
-            echo "clean_name=$VTT_NAME" >> $GITHUB_OUTPUT
-          fi
-          
           echo "name_without_ext=$VTT_NAME" >> $GITHUB_OUTPUT
           
-          # 👈 ĐỌC YOUTUBE LINK TỪ FILE INFO
-          if [ -f "output/${VTT_NAME}.info.txt" ]; then
-            YOUTUBE_LINK=$(grep "YouTube Link:" "output/${VTT_NAME}.info.txt" | cut -d' ' -f3- || echo "")
-            VIDEO_ID=$(grep "Video ID:" "output/${VTT_NAME}.info.txt" | cut -d' ' -f3- || echo "")
-            echo "🔗 YouTube: $YOUTUBE_LINK"
-            echo "🎯 Video ID: $VIDEO_ID"
-            echo "youtube_link=$YOUTUBE_LINK" >> $GITHUB_OUTPUT
-            echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+          # 👈 NẾU CHƯA CÓ CLEAN_NAME, DÙNG VTT_NAME
+          if [ -z "$CLEAN_NAME" ]; then
+            echo "clean_name=$VTT_NAME" >> $GITHUB_OUTPUT
           fi
         else
           echo "❌ VTT file NOT created!"
@@ -247,7 +261,7 @@ jobs:
         FILE_NAME: ${{ steps.process.outputs.file_name }}
         NAME_WITHOUT_EXT: ${{ steps.process.outputs.name_without_ext }}
         YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
-        CLEAN_NAME: ${{ steps.process.outputs.clean_name }}  # 👈 THÊM
+        CLEAN_NAME: ${{ steps.process.outputs.clean_name }}
       run: |
         echo "📤 Uploading subtitle to Gist..."
         echo "📁 Files in output:"
@@ -256,17 +270,22 @@ jobs:
         echo "📝 Clean Name: $CLEAN_NAME"
         echo "🔗 YouTube: $YOUTUBE_LINK"
         
-        # 👈 KIỂM TRA FILE VTT THEO CLEAN_NAME
+        # 👈 KIỂM TRA FILE VTT
         if [ -n "$CLEAN_NAME" ] && [ -f "output/${CLEAN_NAME}.vtt" ]; then
           echo "✅ Found VTT with clean_name: ${CLEAN_NAME}.vtt"
         elif [ -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
           echo "✅ Found VTT with name_without_ext: ${NAME_WITHOUT_EXT}.vtt"
+          # Nếu không có CLEAN_NAME, dùng NAME_WITHOUT_EXT
+          if [ -z "$CLEAN_NAME" ]; then
+            CLEAN_NAME="$NAME_WITHOUT_EXT"
+            echo "📝 Using NAME_WITHOUT_EXT as CLEAN_NAME: $CLEAN_NAME"
+          fi
         else
           echo "❌ VTT file not found!"
           exit 1
         fi
         
-        # Chạy script upload
+        # 👈 CHẠY SCRIPT UPLOAD
         python scripts/push_to_gist.py
         
         if [ $? -eq 0 ]; then
