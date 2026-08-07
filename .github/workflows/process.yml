@@ -40,7 +40,8 @@ jobs:
         echo "📁 File ID: ${{ github.event.client_payload.drive_file_id }}"
         echo "📄 File Name: ${{ github.event.client_payload.file_name }}"
         echo "🎯 Video ID: ${{ github.event.client_payload.video_id }}"
-        echo "🔍 Search Name: ${{ github.event.client_payload.search_name }}"
+        echo "📌 Has video_id: ${{ github.event.client_payload.has_video_id }}"
+        echo "🔍 Search by name: ${{ github.event.client_payload.search_by_name }}"
         echo "⏰ Timestamp: ${{ github.event.client_payload.timestamp }}"
     
     # 👈 KIỂM TRA TOKEN
@@ -101,6 +102,7 @@ jobs:
         if [ -f "data/audio/${AUDIO_NAME}" ]; then
           echo "✅ Downloaded: ${AUDIO_NAME}"
           echo "file_name=${AUDIO_NAME}" >> $GITHUB_OUTPUT
+          echo "name_without_ext=${AUDIO_NAME%.*}" >> $GITHUB_OUTPUT
         else
           echo "❌ Download failed!"
           exit 1
@@ -124,10 +126,12 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         FILE_NAME: ${{ steps.download.outputs.file_name }}
-        VIDEO_ID_OVERRIDE: ${{ github.event.client_payload.video_id }}  # 👈 THÊM
-        SEARCH_NAME: ${{ github.event.client_payload.search_name }}     # 👈 THÊM
+        NAME_WITHOUT_EXT: ${{ steps.download.outputs.name_without_ext }}
+        VIDEO_ID_OVERRIDE: ${{ github.event.client_payload.video_id }}
+        HAS_VIDEO_ID: ${{ github.event.client_payload.has_video_id }}
+        SEARCH_BY_NAME: ${{ github.event.client_payload.search_by_name }}
       run: |
-        # 👈 TÌM FILE AUDIO (HỖ TRỢ NHIỀU ĐỊNH DẠNG)
+        # 👈 TÌM FILE AUDIO
         if [ -n "$FILE_NAME" ]; then
           AUDIO_FILE="data/audio/${FILE_NAME}"
         else
@@ -142,12 +146,15 @@ jobs:
         
         # 👈 LẤY TÊN GỐC (KHÔNG EXTENSION)
         FILE_NAME=$(basename "$AUDIO_FILE")
-        NAME_WITHOUT_EXT="${FILE_NAME%.*}"
+        if [ -z "$NAME_WITHOUT_EXT" ]; then
+          NAME_WITHOUT_EXT="${FILE_NAME%.*}"
+        fi
         
         echo "🎬 Processing: $FILE_NAME"
         echo "📝 Output name: $NAME_WITHOUT_EXT"
-        echo "🎯 Video ID from payload: $VIDEO_ID_OVERRIDE"
-        echo "🔍 Search name: $SEARCH_NAME"
+        echo "🎯 VIDEO_ID_OVERRIDE: $VIDEO_ID_OVERRIDE"
+        echo "📌 HAS_VIDEO_ID: $HAS_VIDEO_ID"
+        echo "🔍 SEARCH_BY_NAME: $SEARCH_BY_NAME"
         
         echo "video_id=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
         echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
@@ -157,30 +164,38 @@ jobs:
         
         echo "📁 Running Docker container with HF_TOKEN..."
         
-        # 👈 CHẠY DOCKER VỚI VIDEO_ID TỪ PAYLOAD
-        docker run --rm \
-          -v $(pwd):/app \
-          -w /app \
-          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
-          -e ORIGINAL_FILENAME="$FILE_NAME" \
-          -e VIDEO_ID_OVERRIDE="$VIDEO_ID_OVERRIDE" \
-          -e SEARCH_NAME="$SEARCH_NAME" \
-          ${{ steps.image.outputs.image }}:latest \
-          bash -c "
-            echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
-            echo '✅ Token prefix: '\${HF_TOKEN:0:10}
-            echo '🎯 VIDEO_ID_OVERRIDE: $VIDEO_ID_OVERRIDE'
-            echo '🔍 SEARCH_NAME: $SEARCH_NAME'
-            
-            # 👈 NẾU CÓ VIDEO_ID_OVERRIDE, DÙNG --video-id
-            if [ -n \"$VIDEO_ID_OVERRIDE\" ]; then
-              echo '✅ Sử dụng Video ID từ payload: $VIDEO_ID_OVERRIDE'
+        # 👈 QUYẾT ĐỊNH CÁCH GỌI SCRIPT DỰA TRÊN HAS_VIDEO_ID
+        if [ -n "$VIDEO_ID_OVERRIDE" ] && [ "$HAS_VIDEO_ID" = "true" ]; then
+          # 👈 CÓ VIDEO ID TỪ PAYLOAD → DÙNG --video-id (KHÔNG TÌM KIẾM)
+          echo "✅ Sử dụng Video ID từ payload: $VIDEO_ID_OVERRIDE"
+          echo "📌 KHÔNG tìm kiếm trên YouTube"
+          
+          docker run --rm \
+            -v $(pwd):/app \
+            -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            -e VIDEO_ID_OVERRIDE="$VIDEO_ID_OVERRIDE" \
+            ${{ steps.image.outputs.image }}:latest \
+            bash -c "
+              echo '🎯 Dùng Video ID từ payload (KHÔNG tìm kiếm)'
+              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
               python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --video-id '$VIDEO_ID_OVERRIDE'
-            else
-              echo '🔍 Không có Video ID, tìm kiếm theo tên file hoặc SEARCH_NAME'
+            "
+        else
+          # 👈 KHÔNG CÓ VIDEO ID → TÌM KIẾM TRÊN YOUTUBE
+          echo "🔍 Không có Video ID, tìm kiếm trên YouTube theo tên file"
+          
+          docker run --rm \
+            -v $(pwd):/app \
+            -w /app \
+            -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+            ${{ steps.image.outputs.image }}:latest \
+            bash -c "
+              echo '🔍 Tìm kiếm YouTube theo tên file'
+              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
               python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'
-            fi
-          "
+            "
+        fi
         
         echo "📁 Checking output files:"
         ls -la output/
