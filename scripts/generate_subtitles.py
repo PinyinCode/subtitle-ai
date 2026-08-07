@@ -62,6 +62,56 @@ except ImportError:
     from pypinyin import pinyin, Style
 
 
+# ============================================================
+# HÀM LÀM SẠCH TÊN (GIỐNG NHƯ LÚC TÌM KIẾM YOUTUBE)
+# ============================================================
+def clean_filename_for_file(filename):
+    """
+    Làm sạch tên file để dùng làm tên file
+    - GIỮ NGUYÊN nội dung
+    - Chỉ XÓA ký tự đặc biệt
+    - Không dịch, không thay đổi từ
+    - Giống như lúc tìm kiếm trên YouTube
+    """
+    name = Path(filename).stem
+    
+    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT: [] () {} + . , - _ / \ | ...
+    # (Giống như trong clean_search_query)
+    name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
+    
+    # Xóa emoji
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"
+        u"\U0001F300-\U0001F5FF"
+        u"\U0001F680-\U0001F6FF"
+        u"\U0001F1E0-\U0001F1FF"
+        u"\U00002702-\U000027B0"
+        u"\U000024C2-\U0001F251"
+        u"\U0001F900-\U0001F9FF"
+        u"\U0001FA70-\U0001FAFF"
+        "]+", flags=re.UNICODE)
+    name = emoji_pattern.sub(r'', name)
+    
+    # Xóa các từ khóa không cần thiết
+    remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 
+                    'official', '128k', '320k', 'podcast']
+    for word in remove_words:
+        name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
+    
+    # Xóa khoảng trắng thừa
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    # Giới hạn độ dài (tối đa 60 ký tự để tránh tên quá dài)
+    if len(name) > 60:
+        name = name[:60]
+    
+    # Nếu tên rỗng, dùng video_id làm fallback
+    if not name:
+        return None
+    
+    return name
+
+
 # ===== TÌM VIDEO ID TỪ TÊN FILE =====
 def search_video_id_from_filename(filename):
     """
@@ -239,15 +289,13 @@ def extract_video_id_from_filename(filename, video_id_override=None):
     name = Path(filename).stem
     folder = Path(filename).parent
     
-    # 👈 CÁCH 1: ƯU TIÊN VIDEO_ID TỪ PAYLOAD (NHẬP LINK)
+    # CÁCH 1: ƯU TIÊN VIDEO_ID TỪ PAYLOAD (NHẬP LINK)
     if video_id_override:
-        # Kiểm tra video_id hợp lệ (11 ký tự)
         if re.match(r'^[a-zA-Z0-9_-]{11}$', video_id_override):
             print(f"✅ Sử dụng Video ID từ payload: {video_id_override}")
             return video_id_override
         else:
             print(f"⚠️ Video ID từ payload không hợp lệ: {video_id_override}")
-            # Tiếp tục tìm kiếm
     
     # CÁCH 2: ĐỌC TỪ FILE .TXT CÙNG TÊN
     txt_file = folder / f"{name}.txt"
@@ -256,20 +304,17 @@ def extract_video_id_from_filename(filename, video_id_override=None):
             with open(txt_file, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # Tìm video ID trong file .txt
             match = re.search(r'(?:v=|\/)([a-zA-Z0-9_-]{11})', content)
             if match:
                 video_id = match.group(1)
                 print(f"📄 Đọc video ID từ file .txt: {video_id}")
                 return video_id
             
-            # Tìm link YouTube đầy đủ
             match = re.search(r'https?://(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})', content)
             if match:
                 video_id = match.group(1)
                 print(f"📄 Đọc link YouTube từ file .txt: {video_id}")
                 return video_id
-                    
         except Exception as e:
             print(f"⚠️ Lỗi đọc file .txt: {e}")
     
@@ -282,7 +327,6 @@ def extract_video_id_from_filename(filename, video_id_override=None):
         return video_id
     
     print(f"❌ KHÔNG TÌM THẤY VIDEO NÀO CHO: {filename}")
-    print(f"💡 Tạo file {name}.txt chứa link YouTube chính xác")
     return None
 
 
@@ -303,7 +347,7 @@ def format_time(seconds):
 def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     audio_file = Path(audio_path)
     
-    # 👈 Tìm video ID - ưu tiên từ payload
+    # Tìm video ID - ưu tiên từ payload
     video_id = extract_video_id_from_filename(audio_file.name, video_id_override)
     
     if not video_id:
@@ -313,19 +357,28 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     youtube_link = get_youtube_link(video_id)
     print(f"🔗 YouTube: {youtube_link}")
     
+    # 👈 LÀM SẠCH TÊN (GIỐNG NHƯ LÚC TÌM KIẾM)
     original_name = audio_file.stem
-    output_filename = original_name
+    clean_name = clean_filename_for_file(original_name)
+    
+    # Fallback: nếu tên sạch rỗng, dùng video_id
+    if not clean_name:
+        clean_name = video_id
+        print(f"⚠️ Tên sau khi làm sạch rỗng, dùng video_id: {clean_name}")
+    
+    print(f"📝 Tên gốc: {original_name}")
+    print(f"📝 Tên sạch: {clean_name}")
     
     if output_path is None:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
-        output_file = output_dir / f"{video_id}.vtt"  # 👈 DÙNG VIDEO_ID CHO TÊN FILE
+        output_file = output_dir / f"{clean_name}.vtt"
     else:
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'='*50}")
-    print(f"📝 Tên gốc: {original_name}")
+    print(f"📝 Tên sạch: {clean_name}")
     print(f"🎯 Video ID: {video_id}")
     print(f"🔗 YouTube: {youtube_link}")
     print(f"📁 Output: {output_file}")
@@ -441,7 +494,7 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
             print(f"   Error at segment {i}: {e}")
             continue
     
-    # LƯU FILE VTT
+    # LƯU FILE VTT (FILE 1)
     print(f"\n💾 Saving VTT to: {output_file}")
     vtt_content = '\n'.join(vtt_lines)
     
@@ -452,11 +505,13 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
         print(f"✅ VTT file written! Size: {output_file.stat().st_size} bytes")
     
     # ============================================================
-    # FILE 1: SUMMARY (video_id_summary.json)
+    # FILE 2: SUMMARY (clean_name_summary.json)
     # ============================================================
     summary = {
         'video_id': video_id,
         'youtube_link': youtube_link,
+        'clean_name': clean_name,
+        'original_name': original_name,
         'language': detected_lang,
         'total_segments': len(segment_list),
         'success_segments': success_count,
@@ -466,49 +521,49 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
         'timestamp': datetime.now().isoformat()
     }
     
-    summary_file = output_file.parent / f"{video_id}_summary.json"  # 👈 DÙNG VIDEO_ID
+    summary_file = output_file.parent / f"{clean_name}_summary.json"
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     print(f"💾 Saved summary to: {summary_file}")
     
     # ============================================================
-    # FILE 2: METADATA (video_id.metadata.json)
+    # FILE 3: METADATA (clean_name.metadata.json)
     # ============================================================
     metadata = {
         'video_id': video_id,
         'youtube_link': youtube_link,
+        'clean_name': clean_name,
+        'original_name': original_name,
         'language': detected_lang,
-        'title': original_name,
         'duration': segment_list[-1]['end'] if segment_list else 0,
         'segments': len(segment_list),
         'generated_at': datetime.now().isoformat()
     }
     
-    metadata_file = output_file.parent / f"{video_id}.metadata.json"
+    metadata_file = output_file.parent / f"{clean_name}.metadata.json"
     with open(metadata_file, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
     print(f"💾 Saved metadata to: {metadata_file}")
     
     # ============================================================
-    # FILE 3: INFO (video_id.info.txt)
+    # FILE 4: INFO (clean_name.info.txt)
     # ============================================================
     if youtube_link:
-        info_file = output_file.parent / f"{video_id}.info.txt"
+        info_file = output_file.parent / f"{clean_name}.info.txt"
         with open(info_file, 'w', encoding='utf-8') as f:
             f.write(f"Video ID: {video_id}\n")
             f.write(f"YouTube Link: {youtube_link}\n")
+            f.write(f"Clean Name: {clean_name}\n")
+            f.write(f"Original Name: {original_name}\n")
             f.write(f"Generated: {datetime.now().isoformat()}\n")
             f.write(f"Language: {detected_lang}\n")
         print(f"💾 Saved info to: {info_file}")
     
-    # ============================================================
-    # FILE 4: VTT (đã lưu ở trên)
-    # ============================================================
-    
-    # Xuất env
+    # Xuất env (vẫn dùng video_id cho workflow)
     with open('video_id.env', 'w', encoding='utf-8') as f:
         f.write(f"VIDEO_ID={video_id}\n")
         f.write(f"YOUTUBE_LINK={youtube_link}\n")
+        f.write(f"CLEAN_NAME={clean_name}\n")
         f.write(f"ORIGINAL_FILENAME={original_name}\n")
     
     print(f"\n{'='*50}")
