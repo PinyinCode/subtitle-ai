@@ -34,12 +34,7 @@ def ensure_yt_dlp():
         subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'yt-dlp'], 
                       check=True, timeout=60)
         print("✅ yt-dlp đã được cài đặt thành công!")
-        result = subprocess.run(['yt-dlp', '--version'], 
-                               capture_output=True, timeout=5, text=True)
-        if result.returncode == 0:
-            print(f"✅ yt-dlp version: {result.stdout.strip()}")
-            return True
-        return False
+        return True
     except Exception as e:
         print(f"❌ Không thể cài yt-dlp: {e}")
         return False
@@ -132,7 +127,6 @@ def search_video_id_from_filename(filename):
             print(f"\n🏆 CHỌN: {best_match['title']}")
             print(f"🔗 https://youtube.com/watch?v={best_match['id']}")
             print(f"📊 Độ khớp: {best_score:.2f}")
-            # 👈 KHÔNG XÁC MINH, TRẢ VỀ LUÔN
             return best_match['id']
         else:
             print(f"❌ Không có video nào khớp (độ khớp cao nhất: {best_score:.2f})")
@@ -237,15 +231,25 @@ def similarity_score(query, title):
     return min(total_score, 1.0)
 
 
-def extract_video_id_from_filename(filename):
+def extract_video_id_from_filename(filename, video_id_override=None):
     """
     Tự động tìm video ID từ tên file
-    CHỈ CẦN LẤY LINK, KHÔNG CẦN XÁC MINH
+    ƯU TIÊN: video_id_override (từ payload) > file .txt > tìm kiếm YouTube
     """
     name = Path(filename).stem
     folder = Path(filename).parent
     
-    # CÁCH 1: ĐỌC TỪ FILE .TXT CÙNG TÊN
+    # 👈 CÁCH 1: ƯU TIÊN VIDEO_ID TỪ PAYLOAD (NHẬP LINK)
+    if video_id_override:
+        # Kiểm tra video_id hợp lệ (11 ký tự)
+        if re.match(r'^[a-zA-Z0-9_-]{11}$', video_id_override):
+            print(f"✅ Sử dụng Video ID từ payload: {video_id_override}")
+            return video_id_override
+        else:
+            print(f"⚠️ Video ID từ payload không hợp lệ: {video_id_override}")
+            # Tiếp tục tìm kiếm
+    
+    # CÁCH 2: ĐỌC TỪ FILE .TXT CÙNG TÊN
     txt_file = folder / f"{name}.txt"
     if txt_file.exists():
         try:
@@ -269,7 +273,7 @@ def extract_video_id_from_filename(filename):
         except Exception as e:
             print(f"⚠️ Lỗi đọc file .txt: {e}")
     
-    # CÁCH 2: TÌM KIẾM TRÊN YOUTUBE
+    # CÁCH 3: TÌM KIẾM TRÊN YOUTUBE
     print(f"🔍 Không có file .txt, tìm kiếm trên YouTube...")
     video_id = search_video_id_from_filename(filename)
     
@@ -296,11 +300,11 @@ def format_time(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-def generate_subtitle(audio_path, output_path=None):
+def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     audio_file = Path(audio_path)
     
-    # Tìm video ID
-    video_id = extract_video_id_from_filename(audio_file.name)
+    # 👈 Tìm video ID - ưu tiên từ payload
+    video_id = extract_video_id_from_filename(audio_file.name, video_id_override)
     
     if not video_id:
         print(f"❌ Không tìm thấy video ID cho: {audio_file.name}")
@@ -499,6 +503,7 @@ def main():
     parser.add_argument('--audio', help='Path to audio file')
     parser.add_argument('--output', help='Path to output VTT file')
     parser.add_argument('--latest', action='store_true', help='Process latest file')
+    parser.add_argument('--video-id', help='Video ID from payload (ưu tiên)')  # 👈 THÊM THAM SỐ MỚI
     
     args = parser.parse_args()
     
@@ -508,7 +513,8 @@ def main():
             print(f"❌ Audio file not found: {audio_path}")
             return
         
-        result = generate_subtitle(audio_path, args.output)
+        # 👈 TRUYỀN VIDEO_ID TỪ PAYLOAD
+        result = generate_subtitle(audio_path, args.output, args.video_id)
         if result:
             print(f"\n✅ Done: {result}")
         return
@@ -526,7 +532,9 @@ def main():
     print(f"📌 Processing latest: {latest_audio}")
     
     try:
-        result = generate_subtitle(latest_audio)
+        # 👈 CÓ THỂ LẤY VIDEO_ID TỪ ENV HOẶC KHÔNG
+        video_id_override = os.environ.get('VIDEO_ID_OVERRIDE')
+        result = generate_subtitle(latest_audio, video_id_override=video_id_override)
         if result:
             print(f"\n✅ Done: {result}")
     except Exception as e:
