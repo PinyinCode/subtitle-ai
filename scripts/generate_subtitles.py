@@ -319,7 +319,7 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     if output_path is None:
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
-        output_file = output_dir / f"{output_filename}.vtt"
+        output_file = output_dir / f"{video_id}.vtt"  # 👈 DÙNG VIDEO_ID CHO TÊN FILE
     else:
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -451,7 +451,9 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
     if output_file.exists():
         print(f"✅ VTT file written! Size: {output_file.stat().st_size} bytes")
     
-    # LƯU SUMMARY
+    # ============================================================
+    # FILE 1: SUMMARY (video_id_summary.json)
+    # ============================================================
     summary = {
         'video_id': video_id,
         'youtube_link': youtube_link,
@@ -464,13 +466,13 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
         'timestamp': datetime.now().isoformat()
     }
     
-    summary_file = output_file.parent / f"{output_filename}_summary.json"
+    summary_file = output_file.parent / f"{video_id}_summary.json"  # 👈 DÙNG VIDEO_ID
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     print(f"💾 Saved summary to: {summary_file}")
     
     # ============================================================
-    # 👈 THÊM PHẦN NÀY: LƯU METADATA (FILE THỨ 3)
+    # FILE 2: METADATA (video_id.metadata.json)
     # ============================================================
     metadata = {
         'video_id': video_id,
@@ -482,17 +484,16 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
         'generated_at': datetime.now().isoformat()
     }
     
-    metadata_file = output_file.parent / f"{output_filename}.metadata.json"
+    metadata_file = output_file.parent / f"{video_id}.metadata.json"
     with open(metadata_file, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
     print(f"💾 Saved metadata to: {metadata_file}")
-    # ============================================================
-    # 👈 KẾT THÚC PHẦN THÊM
-    # ============================================================
     
-    # LƯU INFO (FILE THỨ 4)
+    # ============================================================
+    # FILE 3: INFO (video_id.info.txt)
+    # ============================================================
     if youtube_link:
-        info_file = output_file.parent / f"{output_filename}.info.txt"
+        info_file = output_file.parent / f"{video_id}.info.txt"
         with open(info_file, 'w', encoding='utf-8') as f:
             f.write(f"Video ID: {video_id}\n")
             f.write(f"YouTube Link: {youtube_link}\n")
@@ -500,23 +501,32 @@ def generate_subtitle(audio_path, output_path=None, video_id_override=None):
             f.write(f"Language: {detected_lang}\n")
         print(f"💾 Saved info to: {info_file}")
     
+    # ============================================================
+    # FILE 4: VTT (đã lưu ở trên)
+    # ============================================================
+    
     # Xuất env
     with open('video_id.env', 'w', encoding='utf-8') as f:
         f.write(f"VIDEO_ID={video_id}\n")
         f.write(f"YOUTUBE_LINK={youtube_link}\n")
-        f.write(f"ORIGINAL_FILENAME={output_filename}\n")
+        f.write(f"ORIGINAL_FILENAME={original_name}\n")
     
     print(f"\n{'='*50}")
     print(f"✅ COMPLETE!")
     print(f"{'='*50}")
-    print(f"Output: {output_file}")
-    print(f"Success: {success_count}/{len(segment_list)}")
-    print(f"Language: {detected_lang}")
+    print(f"📁 Output folder: {output_file.parent}")
+    print(f"📄 1. VTT: {output_file.name}")
+    print(f"📄 2. INFO: {info_file.name if youtube_link else 'N/A'}")
+    print(f"📄 3. METADATA: {metadata_file.name}")
+    print(f"📄 4. SUMMARY: {summary_file.name}")
+    print(f"📊 Success: {success_count}/{len(segment_list)}")
+    print(f"🌐 Language: {detected_lang}")
     if youtube_link:
         print(f"🔗 YouTube: {youtube_link}")
     print(f"{'='*50}\n")
     
     return str(output_file)
+
 
 # ===== MAIN =====
 def main():
@@ -524,7 +534,7 @@ def main():
     parser.add_argument('--audio', help='Path to audio file')
     parser.add_argument('--output', help='Path to output VTT file')
     parser.add_argument('--latest', action='store_true', help='Process latest file')
-    parser.add_argument('--video-id', help='Video ID from payload (ưu tiên)')  # 👈 THÊM THAM SỐ MỚI
+    parser.add_argument('--video-id', help='Video ID from payload (ưu tiên)')
     
     args = parser.parse_args()
     
@@ -534,7 +544,6 @@ def main():
             print(f"❌ Audio file not found: {audio_path}")
             return
         
-        # 👈 TRUYỀN VIDEO_ID TỪ PAYLOAD
         result = generate_subtitle(audio_path, args.output, args.video_id)
         if result:
             print(f"\n✅ Done: {result}")
@@ -553,7 +562,6 @@ def main():
     print(f"📌 Processing latest: {latest_audio}")
     
     try:
-        # 👈 CÓ THỂ LẤY VIDEO_ID TỪ ENV HOẶC KHÔNG
         video_id_override = os.environ.get('VIDEO_ID_OVERRIDE')
         result = generate_subtitle(latest_audio, video_id_override=video_id_override)
         if result:
