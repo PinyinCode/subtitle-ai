@@ -156,10 +156,6 @@ jobs:
         echo "📌 HAS_VIDEO_ID: $HAS_VIDEO_ID"
         echo "🔍 SEARCH_BY_NAME: $SEARCH_BY_NAME"
         
-        echo "video_id=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
-        echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
-        echo "name_without_ext=$NAME_WITHOUT_EXT" >> $GITHUB_OUTPUT
-        
         mkdir -p output
         
         echo "📁 Running Docker container with HF_TOKEN..."
@@ -200,12 +196,29 @@ jobs:
         echo "📁 Checking output files:"
         ls -la output/
         
-        # 👈 KIỂM TRA FILE VTT (TÊN GỐC HOẶC TỪ VIDEO_ID)
+        # 👈 ĐỌC VIDEO_ID VÀ CLEAN_NAME TỪ video_id.env
+        if [ -f "video_id.env" ]; then
+          echo "📄 Reading video_id.env..."
+          cat video_id.env
+          source video_id.env
+          echo "CLEAN_NAME from env: $CLEAN_NAME"
+          echo "VIDEO_ID from env: $VIDEO_ID"
+        fi
+        
+        # 👈 KIỂM TRA FILE VTT
         VTT_FILE=$(find output -name "*.vtt" | head -1)
         if [ -f "$VTT_FILE" ]; then
           VTT_NAME=$(basename "$VTT_FILE" .vtt)
           echo "✅ Processing completed: $VTT_NAME"
           echo "has_audio=true" >> $GITHUB_OUTPUT
+          
+          # 👈 NẾU CLEAN_NAME CÓ TRONG ENV, DÙNG NÓ
+          if [ -n "$CLEAN_NAME" ]; then
+            echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "clean_name=$VTT_NAME" >> $GITHUB_OUTPUT
+          fi
+          
           echo "name_without_ext=$VTT_NAME" >> $GITHUB_OUTPUT
           
           # 👈 ĐỌC YOUTUBE LINK TỪ FILE INFO
@@ -234,16 +247,21 @@ jobs:
         FILE_NAME: ${{ steps.process.outputs.file_name }}
         NAME_WITHOUT_EXT: ${{ steps.process.outputs.name_without_ext }}
         YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
+        CLEAN_NAME: ${{ steps.process.outputs.clean_name }}  # 👈 THÊM
       run: |
         echo "📤 Uploading subtitle to Gist..."
         echo "📁 Files in output:"
         ls -la output/
         echo "🎯 Video ID: $VIDEO_ID"
-        echo "📝 Tên gốc: $FILE_NAME"
+        echo "📝 Clean Name: $CLEAN_NAME"
         echo "🔗 YouTube: $YOUTUBE_LINK"
         
-        # 👈 KIỂM TRA FILE VTT
-        if [ ! -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
+        # 👈 KIỂM TRA FILE VTT THEO CLEAN_NAME
+        if [ -n "$CLEAN_NAME" ] && [ -f "output/${CLEAN_NAME}.vtt" ]; then
+          echo "✅ Found VTT with clean_name: ${CLEAN_NAME}.vtt"
+        elif [ -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
+          echo "✅ Found VTT with name_without_ext: ${NAME_WITHOUT_EXT}.vtt"
+        else
           echo "❌ VTT file not found!"
           exit 1
         fi
