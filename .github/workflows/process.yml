@@ -245,6 +245,14 @@ jobs:
         if [ $? -eq 0 ]; then
           echo "✅ Upload to Gist successful!"
           echo "gist_uploaded=true" >> $GITHUB_OUTPUT
+          
+          # 👈 LẤY GIST URL TỪ FILE
+          GIST_URL_FILE="${CLEAN_NAME}_gist_url.txt"
+          if [ -f "$GIST_URL_FILE" ]; then
+            GIST_URL=$(cat "$GIST_URL_FILE")
+            echo "gist_url=$GIST_URL" >> $GITHUB_OUTPUT
+            echo "✅ Gist URL: $GIST_URL"
+          fi
         else
           echo "❌ Upload to Gist FAILED!"
           echo "gist_uploaded=false" >> $GITHUB_OUTPUT
@@ -344,107 +352,66 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         JOB_STATUS: ${{ job.status }}
-        FILE_NAME: ${{ github.event.client_payload.file_name }}
-        CLEAN_NAME: ${{ steps.process.outputs.clean_name }}
-        VIDEO_ID: ${{ steps.process.outputs.video_id }}
         YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
-        GIST_UPLOADED: ${{ steps.upload_gist.outputs.gist_uploaded }}
-        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        VTT_FILE: output/${{ steps.process.outputs.clean_name }}.vtt
+        GIST_URL: ${{ steps.upload_gist.outputs.gist_url }}
+        CLEAN_NAME: ${{ steps.process.outputs.clean_name }}
+        FILE_NAME: ${{ github.event.client_payload.file_name }}
       run: |
-        # Check if Telegram is configured
+        # Check Telegram config
         if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ "$TELEGRAM_BOT_TOKEN" = "your_bot_token_here" ]; then
-          echo "⚠️ TELEGRAM_BOT_TOKEN not configured, skipping"
+          echo "⚠️ TELEGRAM_BOT_TOKEN not configured"
           exit 0
         fi
         
         if [ -z "$TELEGRAM_CHAT_ID" ] || [ "$TELEGRAM_CHAT_ID" = "your_chat_id_here" ]; then
-          echo "⚠️ TELEGRAM_CHAT_ID not configured, skipping"
+          echo "⚠️ TELEGRAM_CHAT_ID not configured"
           exit 0
         fi
         
-        # Send message based on status
-        if [ "$JOB_STATUS" = "success" ] && [ "$GIST_UPLOADED" = "true" ]; then
-          # SUCCESS MESSAGE
-          MSG="✅ *SUCCESS*\n"
-          MSG="${MSG}━━━━━━━━━━━━━━━━━━\n"
-          MSG="${MSG}📄 File: ${FILE_NAME:-N/A}\n"
-          MSG="${MSG}📝 Subtitle: ${CLEAN_NAME:-N/A}\n"
+        # 👈 LẤY TÊN HIỂN THỊ (ƯU TIÊN CLEAN_NAME, NẾU KHÔNG CÓ THÌ DÙNG FILE_NAME)
+        if [ -n "$CLEAN_NAME" ]; then
+          VIDEO_NAME="$CLEAN_NAME"
+        elif [ -n "$FILE_NAME" ]; then
+          VIDEO_NAME="${FILE_NAME%.*}"  # Bỏ extension
+        else
+          VIDEO_NAME="Unknown"
+        fi
+        
+        # Build message
+        if [ "$JOB_STATUS" = "success" ] && [ -n "$GIST_URL" ]; then
+          EMOJI="✅"
+          STATUS="SUCCESS"
+          
+          MSG="${EMOJI} *${STATUS}*"
+          MSG="${MSG}\n📝 ${VIDEO_NAME}"
+          
           if [ -n "$YOUTUBE_LINK" ]; then
-            MSG="${MSG}🎬 YouTube: ${YOUTUBE_LINK}\n"
-          fi
-          MSG="${MSG}🔗 Workflow: ${RUN_URL}"
-          
-          echo "📤 Sending success notification..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="${MSG}" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview="true")
-          
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✅ Message sent!"
-          else
-            echo "❌ Failed to send message (HTTP $HTTP_CODE)"
-            echo "$RESPONSE" | head -n-1
+            MSG="${MSG}\n🎬 [YouTube](${YOUTUBE_LINK})"
           fi
           
-          # Send VTT file if exists and not too large
-          if [ -f "$VTT_FILE" ]; then
-            FILE_SIZE=$(stat -c%s "$VTT_FILE" 2>/dev/null || stat -f%z "$VTT_FILE" 2>/dev/null || echo 0)
-            MAX_SIZE=$((50 * 1024 * 1024))  # 50MB
-            
-            if [ "$FILE_SIZE" -lt "$MAX_SIZE" ]; then
-              echo "📤 Sending VTT file (${FILE_SIZE} bytes)..."
-              FILE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-                -F chat_id="${TELEGRAM_CHAT_ID}" \
-                -F document=@"${VTT_FILE}" \
-                -F caption="📝 ${CLEAN_NAME}.vtt")
-              
-              FILE_HTTP=$(echo "$FILE_RESPONSE" | tail -n1)
-              if [ "$FILE_HTTP" -eq 200 ]; then
-                echo "✅ VTT file sent!"
-              else
-                echo "⚠️ Failed to send file (HTTP $FILE_HTTP)"
-              fi
-            else
-              echo "⚠️ File too large (${FILE_SIZE} bytes), skipping"
-            fi
-          else
-            echo "⚠️ VTT file not found: $VTT_FILE"
-          fi
-          
-        elif [ "$JOB_STATUS" = "failure" ]; then
-          # FAILURE MESSAGE
-          MSG="❌ *FAILED*\n"
-          MSG="${MSG}━━━━━━━━━━━━━━━━━━\n"
-          MSG="${MSG}📄 File: ${FILE_NAME:-N/A}\n"
-          MSG="${MSG}🔗 Workflow: ${RUN_URL}\n"
-          MSG="${MSG}⏰ Time: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          echo "📤 Sending failure notification..."
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="${MSG}" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview="true"
-          
-          echo "✅ Failure notification sent!"
+          MSG="${MSG}\n📥 [VTT](${GIST_URL})"
           
         else
-          # OTHER STATUS (cancelled, skipped, etc.)
-          MSG="ℹ️ *Workflow ${JOB_STATUS}*\n"
-          MSG="${MSG}━━━━━━━━━━━━━━━━━━\n"
-          MSG="${MSG}📄 File: ${FILE_NAME:-N/A}\n"
-          MSG="${MSG}🔗 Workflow: ${RUN_URL}"
+          EMOJI="❌"
+          STATUS="FAILED"
           
-          echo "📤 Sending status notification..."
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="${MSG}" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview="true"
-          
-          echo "✅ Status notification sent!"
+          MSG="${EMOJI} *${STATUS}*"
+          MSG="${MSG}\n📝 ${VIDEO_NAME}"
+        fi
+        
+        # Send message
+        echo "📤 Sending notification..."
+        echo "Message: $MSG"
+        
+        RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          -d chat_id="${TELEGRAM_CHAT_ID}" \
+          -d text="${MSG}" \
+          -d parse_mode="Markdown" \
+          -d disable_web_page_preview="true")
+        
+        if echo "$RESPONSE" | grep -q '"ok":true'; then
+          echo "✅ Notification sent!"
+        else
+          echo "❌ Failed to send notification"
+          echo "Response: $RESPONSE"
         fi
