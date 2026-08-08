@@ -38,12 +38,12 @@ jobs:
         echo "📄 File Name: ${{ github.event.client_payload.file_name }}"
         echo "🎯 Video ID: ${{ github.event.client_payload.video_id }}"
     
-    - name: Debug - Check HF_TOKEN on runner
+    - name: Debug - Check HF_TOKEN
       run: |
         if [ -n "$HF_TOKEN" ]; then
-          echo "✅ HF_TOKEN is set on runner (length: ${#HF_TOKEN})"
+          echo "✅ HF_TOKEN is set (length: ${#HF_TOKEN})"
         else
-          echo "❌ HF_TOKEN is NOT set on runner!"
+          echo "❌ HF_TOKEN is NOT set!"
         fi
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -83,6 +83,9 @@ jobs:
         fi
         
         echo "📥 Downloading from Google Drive..."
+        echo "File ID: $DRIVE_FILE_ID"
+        echo "File Name: $AUDIO_NAME"
+        
         gdown "https://drive.google.com/uc?id=${DRIVE_FILE_ID}" -O "data/audio/${AUDIO_NAME}"
         
         if [ -f "data/audio/${AUDIO_NAME}" ]; then
@@ -134,9 +137,11 @@ jobs:
         fi
         
         echo "🎬 Processing: $FILE_NAME"
+        echo "📝 Output name: $NAME_WITHOUT_EXT"
         mkdir -p output
         
         if [ -n "$VIDEO_ID_OVERRIDE" ] && [ "$HAS_VIDEO_ID" = "true" ]; then
+          echo "✅ Using Video ID from payload: $VIDEO_ID_OVERRIDE"
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
@@ -145,6 +150,7 @@ jobs:
             ${{ steps.image.outputs.image }}:latest \
             bash -c "python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --video-id '$VIDEO_ID_OVERRIDE'"
         else
+          echo "🔍 Searching YouTube by file name"
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
@@ -153,7 +159,12 @@ jobs:
             bash -c "python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'"
         fi
         
+        echo "📁 Checking output files:"
+        ls -la output/
+        
+        # Read video_id.env
         if [ -f "video_id.env" ]; then
+          echo "📄 Reading video_id.env..."
           while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" || "$line" =~ ^# ]] && continue
             if [[ "$line" =~ ^([A-Z_]+)=\"?(.*)\"?$ ]]; then
@@ -162,20 +173,27 @@ jobs:
               var_value="${var_value%\"}"
               var_value="${var_value#\"}"
               declare "$var_name=$var_value"
+              echo "✅ Set $var_name"
             fi
           done < video_id.env
           
           if [ -n "$CLEAN_NAME" ]; then
             echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
+            echo "✅ CLEAN_NAME: $CLEAN_NAME"
           fi
           if [ -n "$VIDEO_ID" ]; then
             echo "video_id=$VIDEO_ID" >> $GITHUB_OUTPUT
+            echo "✅ VIDEO_ID: $VIDEO_ID"
           fi
           if [ -n "$YOUTUBE_LINK" ]; then
             echo "youtube_link=$YOUTUBE_LINK" >> $GITHUB_OUTPUT
+            echo "✅ YOUTUBE_LINK: $YOUTUBE_LINK"
           fi
+        else
+          echo "⚠️ video_id.env not found"
         fi
         
+        # Check VTT file
         VTT_FILE=$(find output -name "*.vtt" | head -1)
         if [ -f "$VTT_FILE" ]; then
           VTT_NAME=$(basename "$VTT_FILE" .vtt)
@@ -203,11 +221,19 @@ jobs:
         YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
         CLEAN_NAME: ${{ steps.process.outputs.clean_name }}
       run: |
+        echo "📤 Uploading subtitle to Gist..."
+        echo "📁 Files in output:"
+        ls -la output/
+        echo "🎯 Video ID: $VIDEO_ID"
+        echo "📝 Clean Name: $CLEAN_NAME"
+        
         if [ -n "$CLEAN_NAME" ] && [ -f "output/${CLEAN_NAME}.vtt" ]; then
           echo "✅ Found VTT with clean_name: ${CLEAN_NAME}.vtt"
         elif [ -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
+          echo "✅ Found VTT with name_without_ext: ${NAME_WITHOUT_EXT}.vtt"
           if [ -z "$CLEAN_NAME" ]; then
             CLEAN_NAME="$NAME_WITHOUT_EXT"
+            echo "📝 Using NAME_WITHOUT_EXT as CLEAN_NAME: $CLEAN_NAME"
           fi
         else
           echo "❌ VTT file not found!"
@@ -225,7 +251,7 @@ jobs:
           exit 1
         fi
     
-    - name: Delete file from Google Drive (OAuth)
+    - name: Delete file from Google Drive
       if: |
         steps.upload_gist.outputs.gist_uploaded == 'true' && 
         (github.event.action == 'process_drive_audio' || github.event.action == 'new_drive_file')
@@ -235,56 +261,49 @@ jobs:
         OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
         OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
       run: |
+        echo "🗑️ Deleting file from Google Drive..."
+        
         if [ -z "$OAUTH_CLIENT_ID" ] || [ -z "$OAUTH_CLIENT_SECRET" ] || [ -z "$OAUTH_REFRESH_TOKEN" ]; then
           echo "⚠️ OAuth credentials not configured, skipping delete"
           exit 0
         fi
         
-        cat > /tmp/delete_oauth.py << 'EOF'
+        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+        
+        python3 << 'EOF'
         import os, sys
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
 
-        def delete_file_with_oauth(file_id, client_id, client_secret, refresh_token):
-            try:
-                creds = Credentials(
-                    None,
-                    refresh_token=refresh_token,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    token_uri='https://oauth2.googleapis.com/token'
-                )
-                creds.refresh(Request())
-                service = build('drive', 'v3', credentials=creds)
-                service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
-                return True
-            except HttpError as error:
-                if error.resp.status == 404:
-                    return True
-                return False
-            except Exception:
-                return False
+        file_id = os.getenv('DRIVE_FILE_ID')
+        client_id = os.getenv('OAUTH_CLIENT_ID')
+        client_secret = os.getenv('OAUTH_CLIENT_SECRET')
+        refresh_token = os.getenv('OAUTH_REFRESH_TOKEN')
 
-        def main():
-            file_id = os.getenv('DRIVE_FILE_ID')
-            client_id = os.getenv('OAUTH_CLIENT_ID')
-            client_secret = os.getenv('OAUTH_CLIENT_SECRET')
-            refresh_token = os.getenv('OAUTH_REFRESH_TOKEN')
-            
-            if not all([file_id, client_id, client_secret, refresh_token]):
+        try:
+            creds = Credentials(
+                None,
+                refresh_token=refresh_token,
+                client_id=client_id,
+                client_secret=client_secret,
+                token_uri='https://oauth2.googleapis.com/token'
+            )
+            creds.refresh(Request())
+            service = build('drive', 'v3', credentials=creds)
+            service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+            print(f"✅ File {file_id} deleted successfully!")
+        except HttpError as error:
+            if error.resp.status == 404:
+                print(f"⚠️ File {file_id} not found (already deleted)")
+            else:
+                print(f"❌ Google API error: {error}")
                 sys.exit(1)
-            
-            success = delete_file_with_oauth(file_id, client_id, client_secret, refresh_token)
-            sys.exit(0 if success else 1)
-
-        if __name__ == "__main__":
-            main()
+        except Exception as error:
+            print(f"❌ Unexpected error: {error}")
+            sys.exit(1)
         EOF
-        
-        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
-        python3 /tmp/delete_oauth.py || echo "⚠️ Delete failed but continuing"
     
     - name: Remove processing lock
       if: always()
@@ -316,68 +335,116 @@ jobs:
         git diff --staged --quiet || (git commit -m "Cleanup [skip ci]" && git push) || echo "Push skipped"
 
     # =============================================
-    # ===== TELEGRAM NOTIFICATIONS =====
+    # TELEGRAM NOTIFICATIONS
     # =============================================
     
-    # 👈 THÔNG BÁO THẤT BẠI
-    - name: Notify Telegram - Failed
-      if: failure()
+    - name: Send Telegram notification
+      if: always()
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: |
-        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-          echo "⚠️ Telegram credentials not configured"
-          exit 0
-        fi
-        
-        MSG="❌ *Thất bại*\n📄 ${{ github.event.client_payload.file_name }}\n🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        
-        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-          -d chat_id="${TELEGRAM_CHAT_ID}" \
-          -d text="${MSG}" \
-          -d parse_mode="Markdown" \
-          -d disable_web_page_preview="true"
-    
-    # 👈 THÔNG BÁO THÀNH CÔNG + GỬI FILE VTT
-    - name: Notify Telegram - Success with VTT file
-      if: success() && steps.upload_gist.outputs.gist_uploaded == 'true'
-      env:
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        JOB_STATUS: ${{ job.status }}
+        FILE_NAME: ${{ github.event.client_payload.file_name }}
         CLEAN_NAME: ${{ steps.process.outputs.clean_name }}
+        VIDEO_ID: ${{ steps.process.outputs.video_id }}
+        YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
+        GIST_UPLOADED: ${{ steps.upload_gist.outputs.gist_uploaded }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        VTT_FILE: output/${{ steps.process.outputs.clean_name }}.vtt
       run: |
-        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-          echo "⚠️ Telegram credentials not configured"
+        # Check if Telegram is configured
+        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ "$TELEGRAM_BOT_TOKEN" = "your_bot_token_here" ]; then
+          echo "⚠️ TELEGRAM_BOT_TOKEN not configured, skipping"
           exit 0
         fi
         
-        # 👈 TÌM FILE VTT
-        VTT_FILE="output/${CLEAN_NAME}.vtt"
-        if [ ! -f "$VTT_FILE" ]; then
-          echo "⚠️ VTT file not found: ${VTT_FILE}"
+        if [ -z "$TELEGRAM_CHAT_ID" ] || [ "$TELEGRAM_CHAT_ID" = "your_chat_id_here" ]; then
+          echo "⚠️ TELEGRAM_CHAT_ID not configured, skipping"
           exit 0
         fi
         
-        # 👈 TẠO NỘI DUNG TIN NHẮN
-        MSG="✅ *Thành công*\n📄 ${{ github.event.client_payload.file_name }}\n📝 ${CLEAN_NAME}\n🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        
-        if [ -n "${{ steps.process.outputs.youtube_link }}" ]; then
-          MSG="${MSG}\n🎬 ${{ steps.process.outputs.youtube_link }}"
+        # Send message based on status
+        if [ "$JOB_STATUS" = "success" ] && [ "$GIST_UPLOADED" = "true" ]; then
+          # SUCCESS MESSAGE
+          MSG="✅ *SUCCESS*\n"
+          MSG="${MSG}━━━━━━━━━━━━━━━━━━\n"
+          MSG="${MSG}📄 File: ${FILE_NAME:-N/A}\n"
+          MSG="${MSG}📝 Subtitle: ${CLEAN_NAME:-N/A}\n"
+          if [ -n "$YOUTUBE_LINK" ]; then
+            MSG="${MSG}🎬 YouTube: ${YOUTUBE_LINK}\n"
+          fi
+          MSG="${MSG}🔗 Workflow: ${RUN_URL}"
+          
+          echo "📤 Sending success notification..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview="true")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Message sent!"
+          else
+            echo "❌ Failed to send message (HTTP $HTTP_CODE)"
+            echo "$RESPONSE" | head -n-1
+          fi
+          
+          # Send VTT file if exists and not too large
+          if [ -f "$VTT_FILE" ]; then
+            FILE_SIZE=$(stat -c%s "$VTT_FILE" 2>/dev/null || stat -f%z "$VTT_FILE" 2>/dev/null || echo 0)
+            MAX_SIZE=$((50 * 1024 * 1024))  # 50MB
+            
+            if [ "$FILE_SIZE" -lt "$MAX_SIZE" ]; then
+              echo "📤 Sending VTT file (${FILE_SIZE} bytes)..."
+              FILE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TELEGRAM_CHAT_ID}" \
+                -F document=@"${VTT_FILE}" \
+                -F caption="📝 ${CLEAN_NAME}.vtt")
+              
+              FILE_HTTP=$(echo "$FILE_RESPONSE" | tail -n1)
+              if [ "$FILE_HTTP" -eq 200 ]; then
+                echo "✅ VTT file sent!"
+              else
+                echo "⚠️ Failed to send file (HTTP $FILE_HTTP)"
+              fi
+            else
+              echo "⚠️ File too large (${FILE_SIZE} bytes), skipping"
+            fi
+          else
+            echo "⚠️ VTT file not found: $VTT_FILE"
+          fi
+          
+        elif [ "$JOB_STATUS" = "failure" ]; then
+          # FAILURE MESSAGE
+          MSG="❌ *FAILED*\n"
+          MSG="${MSG}━━━━━━━━━━━━━━━━━━\n"
+          MSG="${MSG}📄 File: ${FILE_NAME:-N/A}\n"
+          MSG="${MSG}🔗 Workflow: ${RUN_URL}\n"
+          MSG="${MSG}⏰ Time: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          echo "📤 Sending failure notification..."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview="true"
+          
+          echo "✅ Failure notification sent!"
+          
+        else
+          # OTHER STATUS (cancelled, skipped, etc.)
+          MSG="ℹ️ *Workflow ${JOB_STATUS}*\n"
+          MSG="${MSG}━━━━━━━━━━━━━━━━━━\n"
+          MSG="${MSG}📄 File: ${FILE_NAME:-N/A}\n"
+          MSG="${MSG}🔗 Workflow: ${RUN_URL}"
+          
+          echo "📤 Sending status notification..."
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview="true"
+          
+          echo "✅ Status notification sent!"
         fi
-        
-        # 👈 GỬI TIN NHẮN TRƯỚC
-        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-          -d chat_id="${TELEGRAM_CHAT_ID}" \
-          -d text="${MSG}" \
-          -d parse_mode="Markdown" \
-          -d disable_web_page_preview="true"
-        
-        # 👈 GỬI FILE VTT KÈM THEO
-        echo "📤 Sending VTT file: ${VTT_FILE}"
-        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-          -F chat_id="${TELEGRAM_CHAT_ID}" \
-          -F document=@"${VTT_FILE}" \
-          -F caption="📝 ${CLEAN_NAME}.vtt"
-        
-        echo "✅ VTT file sent to Telegram!"
