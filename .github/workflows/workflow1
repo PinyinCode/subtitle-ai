@@ -26,37 +26,28 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    # 👈 ĐỊNH NGHĨA TÊN IMAGE (CHỮ THƯỜNG)
     - name: Set image name
       id: image
       run: |
         echo "image=ghcr.io/${{ github.repository_owner }}/subtitle-ai" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
-        echo "✅ Image: ${{ steps.image.outputs.image }}"
     
-    # 👈 HIỂN THỊ PAYLOAD NHẬN ĐƯỢC
     - name: Show received payload
       run: |
         echo "📦 Event: ${{ github.event.action }}"
         echo "📁 File ID: ${{ github.event.client_payload.drive_file_id }}"
         echo "📄 File Name: ${{ github.event.client_payload.file_name }}"
         echo "🎯 Video ID: ${{ github.event.client_payload.video_id }}"
-        echo "📌 Has video_id: ${{ github.event.client_payload.has_video_id }}"
-        echo "🔍 Search by name: ${{ github.event.client_payload.search_by_name }}"
-        echo "⏰ Timestamp: ${{ github.event.client_payload.timestamp }}"
     
-    # 👈 KIỂM TRA TOKEN
-    - name: Debug - Check HF_TOKEN on runner
+    - name: Debug - Check HF_TOKEN
       run: |
         if [ -n "$HF_TOKEN" ]; then
-          echo "✅ HF_TOKEN is set on runner (length: ${#HF_TOKEN})"
-          echo "✅ Token prefix: ${HF_TOKEN:0:10}..."
+          echo "✅ HF_TOKEN is set (length: ${#HF_TOKEN})"
         else
-          echo "❌ HF_TOKEN is NOT set on runner!"
+          echo "❌ HF_TOKEN is NOT set!"
         fi
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
     
-    # 👈 TẠO LOCK (DÙNG TÊN FILE GỐC HOẶC VIDEO_ID)
     - name: Create processing lock
       env:
         FILE_NAME: ${{ github.event.client_payload.file_name }}
@@ -74,7 +65,6 @@ jobs:
         git add .processing/
         git diff --staged --quiet || (git commit -m "Lock: Processing ${LOCK_NAME}" && git push) || echo "Lock already exists"
     
-    # 👈 TẢI TỪ GOOGLE DRIVE (GIỮ TÊN GỐC)
     - name: Download from Google Drive
       id: download
       if: github.event.action == 'process_drive_audio' || github.event.action == 'new_drive_file' || github.event.client_payload.drive_file_id
@@ -86,7 +76,6 @@ jobs:
         pip install gdown
         mkdir -p data/audio
         
-        # 👈 ƯU TIÊN DÙNG TÊN GỐC, NẾU KHÔNG CÓ THÌ DÙNG VIDEO_ID
         if [ -n "$FILE_NAME" ]; then
           AUDIO_NAME="$FILE_NAME"
         else
@@ -120,9 +109,9 @@ jobs:
         docker pull ${{ steps.image.outputs.image }}:latest || true
         echo "✅ Docker image ready"
     
-    # 👈 XỬ LÝ AUDIO VỚI AI
     - name: Process audio with AI
       id: process
+      continue-on-error: true  # 👈 QUAN TRỌNG: KHÔNG FAIL WORKFLOW NẾU LỖI
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         FILE_NAME: ${{ steps.download.outputs.file_name }}
@@ -131,7 +120,6 @@ jobs:
         HAS_VIDEO_ID: ${{ github.event.client_payload.has_video_id }}
         SEARCH_BY_NAME: ${{ github.event.client_payload.search_by_name }}
       run: |
-        # 👈 TÌM FILE AUDIO
         if [ -n "$FILE_NAME" ]; then
           AUDIO_FILE="data/audio/${FILE_NAME}"
         else
@@ -144,7 +132,6 @@ jobs:
           exit 1
         fi
         
-        # 👈 LẤY TÊN GỐC (KHÔNG EXTENSION)
         FILE_NAME=$(basename "$AUDIO_FILE")
         if [ -z "$NAME_WITHOUT_EXT" ]; then
           NAME_WITHOUT_EXT="${FILE_NAME%.*}"
@@ -152,70 +139,45 @@ jobs:
         
         echo "🎬 Processing: $FILE_NAME"
         echo "📝 Output name: $NAME_WITHOUT_EXT"
-        echo "🎯 VIDEO_ID_OVERRIDE: $VIDEO_ID_OVERRIDE"
-        echo "📌 HAS_VIDEO_ID: $HAS_VIDEO_ID"
-        echo "🔍 SEARCH_BY_NAME: $SEARCH_BY_NAME"
-        
         mkdir -p output
         
-        echo "📁 Running Docker container with HF_TOKEN..."
-        
-        # 👈 QUYẾT ĐỊNH CÁCH GỌI SCRIPT
         if [ -n "$VIDEO_ID_OVERRIDE" ] && [ "$HAS_VIDEO_ID" = "true" ]; then
-          echo "✅ Sử dụng Video ID từ payload: $VIDEO_ID_OVERRIDE"
-          echo "📌 KHÔNG tìm kiếm trên YouTube"
-          
+          echo "✅ Using Video ID from payload: $VIDEO_ID_OVERRIDE"
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
             -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             -e VIDEO_ID_OVERRIDE="$VIDEO_ID_OVERRIDE" \
             ${{ steps.image.outputs.image }}:latest \
-            bash -c "
-              echo '🎯 Dùng Video ID từ payload (KHÔNG tìm kiếm)'
-              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
-              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --video-id '$VIDEO_ID_OVERRIDE'
-            "
+            bash -c "python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE' --video-id '$VIDEO_ID_OVERRIDE'"
         else
-          echo "🔍 Không có Video ID, tìm kiếm trên YouTube theo tên file"
-          
+          echo "🔍 Searching YouTube by file name"
           docker run --rm \
             -v $(pwd):/app \
             -w /app \
             -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
             ${{ steps.image.outputs.image }}:latest \
-            bash -c "
-              echo '🔍 Tìm kiếm YouTube theo tên file'
-              echo '✅ HF_TOKEN inside container: length='\${#HF_TOKEN}
-              python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'
-            "
+            bash -c "python scripts/generate_subtitles.py --audio '/app/$AUDIO_FILE'"
         fi
         
         echo "📁 Checking output files:"
         ls -la output/
         
-        # 👈 ĐỌC CLEAN_NAME TỪ video_id.env (AN TOÀN - KHÔNG DÙNG SOURCE)
+        # Read video_id.env
         if [ -f "video_id.env" ]; then
-          echo "📄 Reading video_id.env (safe)..."
-          
-          # 👈 Đọc từng dòng an toàn
+          echo "📄 Reading video_id.env..."
           while IFS= read -r line || [ -n "$line" ]; do
-            # Bỏ qua dòng trống và dòng comment
             [[ -z "$line" || "$line" =~ ^# ]] && continue
-            # Lấy tên biến và giá trị
             if [[ "$line" =~ ^([A-Z_]+)=\"?(.*)\"?$ ]]; then
               var_name="${BASH_REMATCH[1]}"
               var_value="${BASH_REMATCH[2]}"
-              # Loại bỏ dấu ngoặc kép thừa
               var_value="${var_value%\"}"
               var_value="${var_value#\"}"
-              # Gán biến
               declare "$var_name=$var_value"
               echo "✅ Set $var_name"
             fi
           done < video_id.env
           
-          # 👈 Xuất ra GITHUB_OUTPUT
           if [ -n "$CLEAN_NAME" ]; then
             echo "clean_name=$CLEAN_NAME" >> $GITHUB_OUTPUT
             echo "✅ CLEAN_NAME: $CLEAN_NAME"
@@ -232,15 +194,13 @@ jobs:
           echo "⚠️ video_id.env not found"
         fi
         
-        # 👈 KIỂM TRA FILE VTT
+        # Check VTT file
         VTT_FILE=$(find output -name "*.vtt" | head -1)
         if [ -f "$VTT_FILE" ]; then
           VTT_NAME=$(basename "$VTT_FILE" .vtt)
           echo "✅ Processing completed: $VTT_NAME"
           echo "has_audio=true" >> $GITHUB_OUTPUT
           echo "name_without_ext=$VTT_NAME" >> $GITHUB_OUTPUT
-          
-          # 👈 NẾU CHƯA CÓ CLEAN_NAME, DÙNG VTT_NAME
           if [ -z "$CLEAN_NAME" ]; then
             echo "clean_name=$VTT_NAME" >> $GITHUB_OUTPUT
           fi
@@ -250,10 +210,9 @@ jobs:
           exit 1
         fi
     
-    # ===== UPLOAD SUBTITLE TO GIST =====
     - name: Upload subtitle to Gist
       id: upload_gist
-      if: steps.process.outputs.has_audio == 'true'
+      if: steps.process.outputs.has_audio == 'true' && steps.process.outcome == 'success'
       env:
         GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -268,14 +227,11 @@ jobs:
         ls -la output/
         echo "🎯 Video ID: $VIDEO_ID"
         echo "📝 Clean Name: $CLEAN_NAME"
-        echo "🔗 YouTube: $YOUTUBE_LINK"
         
-        # 👈 KIỂM TRA FILE VTT
         if [ -n "$CLEAN_NAME" ] && [ -f "output/${CLEAN_NAME}.vtt" ]; then
           echo "✅ Found VTT with clean_name: ${CLEAN_NAME}.vtt"
         elif [ -f "output/${NAME_WITHOUT_EXT}.vtt" ]; then
           echo "✅ Found VTT with name_without_ext: ${NAME_WITHOUT_EXT}.vtt"
-          # Nếu không có CLEAN_NAME, dùng NAME_WITHOUT_EXT
           if [ -z "$CLEAN_NAME" ]; then
             CLEAN_NAME="$NAME_WITHOUT_EXT"
             echo "📝 Using NAME_WITHOUT_EXT as CLEAN_NAME: $CLEAN_NAME"
@@ -285,99 +241,160 @@ jobs:
           exit 1
         fi
         
-        # 👈 CHẠY SCRIPT UPLOAD
         python scripts/push_to_gist.py
         
         if [ $? -eq 0 ]; then
+          echo "✅ Done!"
           echo "✅ Upload to Gist successful!"
           echo "gist_uploaded=true" >> $GITHUB_OUTPUT
+          
+          GIST_URL_FILE="${CLEAN_NAME}_gist_url.txt"
+          if [ -f "$GIST_URL_FILE" ]; then
+            GIST_URL=$(cat "$GIST_URL_FILE")
+            echo "gist_url=$GIST_URL" >> $GITHUB_OUTPUT
+            echo "✅ Gist URL: $GIST_URL"
+          fi
         else
           echo "❌ Upload to Gist FAILED!"
           echo "gist_uploaded=false" >> $GITHUB_OUTPUT
           exit 1
         fi
     
-    # ===== XÓA FILE TRÊN GOOGLE DRIVE =====
-    - name: Delete file from Google Drive (OAuth)
+    # ===== GỬI TELEGRAM =====
+    - name: Send Telegram notification
+      if: always()
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        YOUTUBE_LINK: ${{ steps.process.outputs.youtube_link }}
+        CLEAN_NAME: ${{ steps.process.outputs.clean_name }}
+        FILE_NAME: ${{ github.event.client_payload.file_name }}
+        GIST_UPLOADED: ${{ steps.upload_gist.outputs.gist_uploaded }}
+        PROCESS_STATUS: ${{ steps.process.outcome }}
+      run: |
+        # Check config
+        if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ "$TELEGRAM_BOT_TOKEN" = "your_bot_token_here" ]; then
+          echo "⚠️ TELEGRAM_BOT_TOKEN not configured"
+          exit 0
+        fi
+        
+        if [ -z "$TELEGRAM_CHAT_ID" ] || [ "$TELEGRAM_CHAT_ID" = "your_chat_id_here" ]; then
+          echo "⚠️ TELEGRAM_CHAT_ID not configured"
+          exit 0
+        fi
+        
+        # Get video name
+        if [ -n "$CLEAN_NAME" ]; then
+          VIDEO_NAME="$CLEAN_NAME"
+        elif [ -n "$FILE_NAME" ]; then
+          VIDEO_NAME="${FILE_NAME%.*}"
+        else
+          VIDEO_NAME="Unknown"
+        fi
+        
+        # 👈 XÁC ĐỊNH TRẠNG THÁI
+        if [ "$GIST_UPLOADED" = "true" ]; then
+          # 👈 ĐỌC GIST URL TỪ FILE
+          GIST_URL=""
+          if [ -n "$CLEAN_NAME" ] && [ -f "${CLEAN_NAME}_gist_url.txt" ]; then
+            GIST_URL=$(cat "${CLEAN_NAME}_gist_url.txt")
+          elif [ -n "$FILE_NAME" ] && [ -f "${FILE_NAME%.*}_gist_url.txt" ]; then
+            GIST_URL=$(cat "${FILE_NAME%.*}_gist_url.txt")
+          else
+            GIST_URL_FILE=$(find . -maxdepth 1 -name "*_gist_url.txt" -type f | head -1)
+            if [ -n "$GIST_URL_FILE" ]; then
+              GIST_URL=$(cat "$GIST_URL_FILE")
+            fi
+          fi
+          
+          # 👈 BUILD MESSAGE SUCCESS
+          MSG="✅ *SUCCESS*"
+          
+          if [ -n "$YOUTUBE_LINK" ]; then
+            MSG="${MSG}\n🎬 [YouTube](${YOUTUBE_LINK})"
+          fi
+          
+          if [ -n "$GIST_URL" ]; then
+            MSG="${MSG}\n📥 [VTT](${GIST_URL})"
+          fi
+          
+          MSG="${MSG}\n*( ${VIDEO_NAME} )*"
+          
+        else
+          # 👈 BUILD MESSAGE FAILED
+          MSG="❌ *FAILED*\n*( ${VIDEO_NAME} )*"
+        fi
+        
+        # Send
+        echo "📤 Sending to Telegram..."
+        
+        RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          -d chat_id="${TELEGRAM_CHAT_ID}" \
+          -d text="${MSG}" \
+          -d parse_mode="Markdown" \
+          -d disable_web_page_preview="true")
+        
+        if echo "$RESPONSE" | grep -q '"ok":true'; then
+          echo "✅ Notification sent!"
+        else
+          echo "❌ Failed: $RESPONSE"
+        fi
+    
+    - name: Delete file from Google Drive
       if: |
         steps.upload_gist.outputs.gist_uploaded == 'true' && 
         (github.event.action == 'process_drive_audio' || github.event.action == 'new_drive_file')
+      continue-on-error: true
       env:
         DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
         OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
         OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
         OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
-        VIDEO_ID: ${{ steps.process.outputs.video_id }}
       run: |
-        echo "🗑️ Deleting file from Google Drive using OAuth..."
-        echo "📹 Video ID: $VIDEO_ID"
-        echo "📎 File ID: $DRIVE_FILE_ID"
+        echo "🗑️ Deleting file from Google Drive..."
         
         if [ -z "$OAUTH_CLIENT_ID" ] || [ -z "$OAUTH_CLIENT_SECRET" ] || [ -z "$OAUTH_REFRESH_TOKEN" ]; then
           echo "⚠️ OAuth credentials not configured, skipping delete"
           exit 0
         fi
         
-        cat > /tmp/delete_oauth.py << 'EOF'
+        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+        
+        python3 << 'EOF'
         import os, sys
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
 
-        def delete_file_with_oauth(file_id, client_id, client_secret, refresh_token):
-            try:
-                creds = Credentials(
-                    None,
-                    refresh_token=refresh_token,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    token_uri='https://oauth2.googleapis.com/token'
-                )
-                creds.refresh(Request())
-                service = build('drive', 'v3', credentials=creds)
-                print(f"🗑️ Deleting file: {file_id}")
-                service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
-                print(f"✅ File {file_id} deleted successfully!")
-                return True
-            except HttpError as error:
-                if error.resp.status == 404:
-                    print(f"⚠️ File {file_id} not found (already deleted)")
-                    return True
+        file_id = os.getenv('DRIVE_FILE_ID')
+        client_id = os.getenv('OAUTH_CLIENT_ID')
+        client_secret = os.getenv('OAUTH_CLIENT_SECRET')
+        refresh_token = os.getenv('OAUTH_REFRESH_TOKEN')
+
+        try:
+            creds = Credentials(
+                None,
+                refresh_token=refresh_token,
+                client_id=client_id,
+                client_secret=client_secret,
+                token_uri='https://oauth2.googleapis.com/token'
+            )
+            creds.refresh(Request())
+            service = build('drive', 'v3', credentials=creds)
+            service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+            print(f"✅ File {file_id} deleted successfully!")
+        except HttpError as error:
+            if error.resp.status == 404:
+                print(f"⚠️ File {file_id} not found (already deleted)")
+            else:
                 print(f"❌ Google API error: {error}")
-                return False
-            except Exception as error:
-                print(f"❌ Unexpected error: {error}")
-                return False
-
-        def main():
-            file_id = os.getenv('DRIVE_FILE_ID')
-            client_id = os.getenv('OAUTH_CLIENT_ID')
-            client_secret = os.getenv('OAUTH_CLIENT_SECRET')
-            refresh_token = os.getenv('OAUTH_REFRESH_TOKEN')
-            
-            if not all([file_id, client_id, client_secret, refresh_token]):
-                print("❌ Missing OAuth credentials")
                 sys.exit(1)
-            
-            success = delete_file_with_oauth(file_id, client_id, client_secret, refresh_token)
-            sys.exit(0 if success else 1)
-
-        if __name__ == "__main__":
-            main()
+        except Exception as error:
+            print(f"❌ Unexpected error: {error}")
+            sys.exit(1)
         EOF
-        
-        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
-        python3 /tmp/delete_oauth.py
-        
-        if [ $? -eq 0 ]; then
-          echo "✅ File deleted successfully from Google Drive!"
-        else
-          echo "❌ Failed to delete file!"
-          exit 1
-        fi
     
-    # 👈 XÓA LOCK
     - name: Remove processing lock
       if: always()
       env:
