@@ -69,12 +69,52 @@ def clean_filename_for_file(filename):
     """
     Làm sạch tên file để dùng làm tên file
     - GIỮ NGUYÊN tiếng Trung, tiếng Việt, tiếng Anh
+    - LOẠI BỎ các ký tự chất lượng video: 128k, 320k, 1080p, 4k, HD, FHD, ...
     - Chỉ XÓA ký tự đặc biệt: 【】《》? , . - _ ( ) [ ] { } ...
     - Giữ nguyên dấu tiếng Việt (ă, â, ê, ơ, ...)
     - Giữ nguyên tiếng Trung (汉字)
     - Không dịch, không thay đổi từ
     """
     name = Path(filename).stem
+    
+    # ============================================================
+    # LOẠI BỎ CÁC KÝ TỰ CHỈ CHẤT LƯỢNG VIDEO/AUDIO
+    # ============================================================
+    # Bitrate: _128k, _320k, -128k, -320k, 128kbps, 320kbps, ...
+    bitrate_pattern = r'[_\-\s]*(?:128|192|256|320|64|96|48|24|16)k(?:bps)?[_\-\s]*'
+    name = re.sub(bitrate_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:128|192|256|320|64|96|48|24|16)k(?:bps)?$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*[\(\-\[]\s*(?:128|192|256|320|64|96|48|24|16)k(?:bps)?\s*[\)\-\]]', ' ', name, flags=re.IGNORECASE)
+    
+    # Độ phân giải: 1080p, 720p, 480p, 360p, 240p, 144p, 4k, 8k, ...
+    resolution_pattern = r'[_\-\s]*(?:1080|720|480|360|240|144|4|8)[kKpP]?[_\-\s]*'
+    name = re.sub(resolution_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:1080|720|480|360|240|144|4|8)[kKpP]?$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*[\(\-\[]\s*(?:1080|720|480|360|240|144|4|8)[kKpP]?\s*[\)\-\]]', ' ', name, flags=re.IGNORECASE)
+    
+    # HD, FHD, UHD, 4K, 8K, ...
+    quality_pattern = r'[_\-\s]*(?:HD|FHD|UHD|HQ|LQ|SQ|HDR|SDR|3D|DOLBY|ATMOS|DTS)[_\-\s]*'
+    name = re.sub(quality_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:HD|FHD|UHD|HQ|LQ|SQ|HDR|SDR|3D|DOLBY|ATMOS|DTS)$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*[\(\-\[]\s*(?:HD|FHD|UHD|HQ|LQ|SQ|HDR|SDR|3D|DOLBY|ATMOS|DTS)\s*[\)\-\]]', ' ', name, flags=re.IGNORECASE)
+    
+    # FPS: 30fps, 60fps, ...
+    fps_pattern = r'[_\-\s]*(?:30|60|120|24|25|50|48|29\.97|23\.976)?[fF][pP][sS][_\-\s]*'
+    name = re.sub(fps_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:30|60|120|24|25|50|48|29\.97|23\.976)?[fF][pP][sS]$', '', name, flags=re.IGNORECASE)
+    
+    # Codec: h264, h265, hevc, x264, x265, avc, vp9, ...
+    codec_pattern = r'[_\-\s]*(?:h264|h265|hevc|x264|x265|avc|vp9|av1|opus|aac|mp3|flac|wav)[_\-\s]*'
+    name = re.sub(codec_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:h264|h265|hevc|x264|x265|avc|vp9|av1|opus|aac|mp3|flac|wav)$', '', name, flags=re.IGNORECASE)
+    
+    # WEB, WEB-DL, WEBRip, BluRay, BDRip, DVD, DVDRip, ...
+    source_pattern = r'[_\-\s]*(?:WEB|WEB[-_.]DL|WEBRip|BluRay|BDRip|DVD|DVDRip|BRRip|HDRip|CAM|TS|TC|R5|DVDR)[_\-\s]*'
+    name = re.sub(source_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:WEB|WEB[-_.]DL|WEBRip|BluRay|BDRip|DVD|DVDRip|BRRip|HDRip|CAM|TS|TC|R5|DVDR)$', '', name, flags=re.IGNORECASE)
+    
+    # Xóa dấu gạch dưới/dấu gạch ngang thừa ở cuối
+    name = re.sub(r'[_\-\s]+$', '', name)
     
     # XÓA KÝ TỰ ĐẶC BIỆT: 【】《》? , . - _ ( ) [ ] { } ...
     name = re.sub(r'[【】《》?.,!@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
@@ -95,7 +135,7 @@ def clean_filename_for_file(filename):
     
     # Xóa các từ khóa không cần thiết
     remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 
-                    'official', '128k', '320k', 'podcast']
+                    'official', 'podcast', 'kbps', 'bitrate', 'download']
     for word in remove_words:
         name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
     
@@ -109,6 +149,81 @@ def clean_filename_for_file(filename):
     # Nếu tên rỗng, dùng video_id làm fallback
     if not name:
         return None
+    
+    return name
+
+
+def clean_search_query(filename):
+    """
+    Làm sạch tên file để tìm kiếm YouTube
+    - XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT
+    - LOẠI BỎ các ký tự chất lượng video
+    - Giữ nguyên chữ cái, số, dấu tiếng Việt, tiếng Trung
+    """
+    name = Path(filename).stem
+    
+    # ============================================================
+    # LOẠI BỎ CÁC KÝ TỰ CHỈ CHẤT LƯỢNG VIDEO/AUDIO
+    # ============================================================
+    # Bitrate
+    bitrate_pattern = r'[_\-\s]*(?:128|192|256|320|64|96|48|24|16)k(?:bps)?[_\-\s]*'
+    name = re.sub(bitrate_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:128|192|256|320|64|96|48|24|16)k(?:bps)?$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*[\(\-\[]\s*(?:128|192|256|320|64|96|48|24|16)k(?:bps)?\s*[\)\-\]]', ' ', name, flags=re.IGNORECASE)
+    
+    # Độ phân giải
+    resolution_pattern = r'[_\-\s]*(?:1080|720|480|360|240|144|4|8)[kKpP]?[_\-\s]*'
+    name = re.sub(resolution_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:1080|720|480|360|240|144|4|8)[kKpP]?$', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s*[\(\-\[]\s*(?:1080|720|480|360|240|144|4|8)[kKpP]?\s*[\)\-\]]', ' ', name, flags=re.IGNORECASE)
+    
+    # HD, FHD, UHD, ...
+    quality_pattern = r'[_\-\s]*(?:HD|FHD|UHD|HQ|LQ|SQ|HDR|SDR|3D|DOLBY|ATMOS|DTS)[_\-\s]*'
+    name = re.sub(quality_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:HD|FHD|UHD|HQ|LQ|SQ|HDR|SDR|3D|DOLBY|ATMOS|DTS)$', '', name, flags=re.IGNORECASE)
+    
+    # FPS
+    fps_pattern = r'[_\-\s]*(?:30|60|120|24|25|50|48|29\.97|23\.976)?[fF][pP][sS][_\-\s]*'
+    name = re.sub(fps_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:30|60|120|24|25|50|48|29\.97|23\.976)?[fF][pP][sS]$', '', name, flags=re.IGNORECASE)
+    
+    # Codec
+    codec_pattern = r'[_\-\s]*(?:h264|h265|hevc|x264|x265|avc|vp9|av1|opus|aac|mp3|flac|wav)[_\-\s]*'
+    name = re.sub(codec_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:h264|h265|hevc|x264|x265|avc|vp9|av1|opus|aac|mp3|flac|wav)$', '', name, flags=re.IGNORECASE)
+    
+    # Source
+    source_pattern = r'[_\-\s]*(?:WEB|WEB[-_.]DL|WEBRip|BluRay|BDRip|DVD|DVDRip|BRRip|HDRip|CAM|TS|TC|R5|DVDR)[_\-\s]*'
+    name = re.sub(source_pattern, ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'[_\-\s]*(?:WEB|WEB[-_.]DL|WEBRip|BluRay|BDRip|DVD|DVDRip|BRRip|HDRip|CAM|TS|TC|R5|DVDR)$', '', name, flags=re.IGNORECASE)
+    
+    # Xóa dấu gạch dưới/dấu gạch ngang thừa ở cuối
+    name = re.sub(r'[_\-\s]+$', '', name)
+    
+    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT
+    name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
+    
+    # Xóa emoji
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"
+        u"\U0001F300-\U0001F5FF"
+        u"\U0001F680-\U0001F6FF"
+        u"\U0001F1E0-\U0001F1FF"
+        u"\U00002702-\U000027B0"
+        u"\U000024C2-\U0001F251"
+        u"\U0001F900-\U0001F9FF"
+        u"\U0001FA70-\U0001FAFF"
+        "]+", flags=re.UNICODE)
+    name = emoji_pattern.sub(r'', name)
+    
+    # Xóa các từ khóa không cần thiết
+    remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 
+                    'official', 'podcast', 'kbps', 'bitrate', 'download']
+    for word in remove_words:
+        name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
+    
+    # Xóa khoảng trắng thừa
+    name = re.sub(r'\s+', ' ', name).strip()
     
     return name
 
@@ -189,42 +304,6 @@ def search_video_id_from_filename(filename):
     except Exception as e:
         print(f"❌ Lỗi tìm kiếm: {e}")
         return None
-
-
-def clean_search_query(filename):
-    """
-    Làm sạch tên file để tìm kiếm YouTube
-    - XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT
-    - Giữ nguyên chữ cái, số, dấu tiếng Việt, tiếng Trung
-    """
-    name = Path(filename).stem
-    
-    # XÓA TẤT CẢ KÝ TỰ ĐẶC BIỆT
-    name = re.sub(r'[\[\](){}.,;:!?@#$%^&*+=~`|/\\<>"\'\-_]', ' ', name)
-    
-    # Xóa emoji
-    emoji_pattern = re.compile("["
-        u"\U0001F600-\U0001F64F"
-        u"\U0001F300-\U0001F5FF"
-        u"\U0001F680-\U0001F6FF"
-        u"\U0001F1E0-\U0001F1FF"
-        u"\U00002702-\U000027B0"
-        u"\U000024C2-\U0001F251"
-        u"\U0001F900-\U0001F9FF"
-        u"\U0001FA70-\U0001FAFF"
-        "]+", flags=re.UNICODE)
-    name = emoji_pattern.sub(r'', name)
-    
-    # Xóa các từ khóa không cần thiết
-    remove_words = ['audio', 'video', 'subtitle', 'track', 'clip', 'full', 
-                    'official', '128k', '320k', 'podcast']
-    for word in remove_words:
-        name = re.sub(r'\b' + word + r'\b', ' ', name, flags=re.IGNORECASE)
-    
-    # Xóa khoảng trắng thừa
-    name = re.sub(r'\s+', ' ', name).strip()
-    
-    return name
 
 
 def similarity_score(query, title):
