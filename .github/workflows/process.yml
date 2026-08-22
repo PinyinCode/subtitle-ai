@@ -275,7 +275,6 @@ jobs:
         PROCESS_STATUS: ${{ steps.process.outcome }}
         PROCESS_HAS_AUDIO: ${{ steps.process.outputs.has_audio }}
       run: |
-        # Check config
         if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ "$TELEGRAM_BOT_TOKEN" = "your_bot_token_here" ]; then
           echo "⚠️ TELEGRAM_BOT_TOKEN not configured"
           exit 0
@@ -286,68 +285,28 @@ jobs:
           exit 0
         fi
         
-        # ============================================================
-        # 👈 XÁC ĐỊNH TÊN AUDIO TỪ NGUỒN PHÙ HỢP
-        # ============================================================
         if [ -n "$FILE_NAME" ]; then
           AUDIO_NAME="$FILE_NAME"
-          echo "📁 Lấy tên từ file đã tải: $AUDIO_NAME"
         elif [ -n "$DRIVE_FILE_NAME" ]; then
           AUDIO_NAME="$DRIVE_FILE_NAME"
-          echo "📁 Lấy tên từ payload: $AUDIO_NAME"
         elif [ -n "$VIDEO_ID" ]; then
           AUDIO_NAME="$VIDEO_ID"
-          echo "📁 Lấy tên từ video_id: $AUDIO_NAME"
         else
           AUDIO_NAME="Unknown"
-          echo "⚠️ Không xác định được tên audio"
         fi
         
-        # ============================================================
-        # 👈 XÁC ĐỊNH TÊN HIỂN THỊ
-        # ============================================================
         if [ -n "$CLEAN_NAME" ] && [ "$CLEAN_NAME" != "null" ] && [ "$CLEAN_NAME" != "" ]; then
           DISPLAY_NAME="$CLEAN_NAME"
-          echo "📝 Dùng CLEAN_NAME: $DISPLAY_NAME"
         else
           DISPLAY_NAME="${AUDIO_NAME%.*}"
-          echo "📝 Dùng tên audio: $DISPLAY_NAME"
         fi
         
-        # ============================================================
-        # 👈 XÂY DỰNG NỘI DUNG TIN NHẮN (DÙNG | THAY CHO XUỐNG DÒNG)
-        # ============================================================
         if [ "$GIST_UPLOADED" = "true" ] && [ "$PROCESS_STATUS" = "success" ]; then
-          # 👈 SUCCESS - Dùng | thay cho xuống dòng
           MSG="✅ SUCCESS | $(echo "$DISPLAY_NAME")"
-          
-          # Thêm YouTube link nếu có
           if [ -n "$YOUTUBE_LINK" ] && [ "$YOUTUBE_LINK" != "null" ]; then
             MSG="${MSG} | 🎬 $(echo "$YOUTUBE_LINK")"
           fi
-          
-          # Thêm Gist URL nếu có
-          GIST_URL=""
-          if [ -n "$CLEAN_NAME" ] && [ -f "${CLEAN_NAME}_gist_url.txt" ]; then
-            GIST_URL=$(cat "${CLEAN_NAME}_gist_url.txt")
-          elif [ -n "$FILE_NAME" ] && [ -f "${FILE_NAME%.*}_gist_url.txt" ]; then
-            GIST_URL=$(cat "${FILE_NAME%.*}_gist_url.txt")
-          elif [ -n "$DRIVE_FILE_NAME" ] && [ -f "${DRIVE_FILE_NAME%.*}_gist_url.txt" ]; then
-            GIST_URL=$(cat "${DRIVE_FILE_NAME%.*}_gist_url.txt")
-          else
-            GIST_URL_FILE=$(find . -maxdepth 1 -name "*_gist_url.txt" -type f | head -1)
-            if [ -n "$GIST_URL_FILE" ]; then
-              GIST_URL=$(cat "$GIST_URL_FILE")
-            fi
-          fi
-          
-          if [ -n "$GIST_URL" ]; then
-            MSG="${MSG} | 📥 $(echo "$GIST_URL")"
-          fi
-          
         else
-          # 👈 FAILED - Dùng | thay cho xuống dòng
-          # Xác định lý do thất bại
           if [ "$PROCESS_HAS_AUDIO" = "false" ]; then
             REASON="Không tìm thấy video phù hợp trên YouTube"
           elif [ "$PROCESS_STATUS" = "failure" ]; then
@@ -355,73 +314,81 @@ jobs:
           else
             REASON="Lỗi không xác định"
           fi
-          
           MSG="❌ FAILED | $(echo "$DISPLAY_NAME") | $(echo "$REASON")"
         fi
         
-        # ============================================================
-        # 👈 GỬI TIN NHẮN (KHÔNG DÙNG PARSE_MODE)
-        # ============================================================
         echo "📤 Sending to Telegram..."
-        echo "📝 Message: $MSG"
-        
-        RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
           -d chat_id="${TELEGRAM_CHAT_ID}" \
-          -d text="${MSG}")
-        
-        if echo "$RESPONSE" | grep -q '"ok":true'; then
-          echo "✅ Notification sent!"
-        else
-          echo "❌ Failed: $RESPONSE"
-        fi
+          -d text="${MSG}" \
+          -d parse_mode="HTML"
     
-    - name: Delete file from Google Drive
+    # 👈 XÓA FILE BẰNG SERVICE ACCOUNT (KHÔNG HẾT HẠN)
+    - name: Delete file from Google Drive (Service Account)
       if: |
         steps.upload_gist.outputs.gist_uploaded == 'true' && 
         (github.event.action == 'process_drive_audio' || github.event.action == 'new_drive_file')
       continue-on-error: true
       env:
         DRIVE_FILE_ID: ${{ github.event.client_payload.drive_file_id }}
-        OAUTH_CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
-        OAUTH_CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
-        OAUTH_REFRESH_TOKEN: ${{ secrets.OAUTH_REFRESH_TOKEN }}
+        DRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.DRIVE_SERVICE_ACCOUNT_KEY }}
       run: |
-        echo "🗑️ Deleting file from Google Drive..."
+        echo "🗑️ Deleting file from Google Drive using Service Account..."
+        echo "📎 File ID: $DRIVE_FILE_ID"
         
-        if [ -z "$OAUTH_CLIENT_ID" ] || [ -z "$OAUTH_CLIENT_SECRET" ] || [ -z "$OAUTH_REFRESH_TOKEN" ]; then
-          echo "⚠️ OAuth credentials not configured, skipping delete"
+        if [ -z "$DRIVE_SERVICE_ACCOUNT_KEY" ]; then
+          echo "⚠️ DRIVE_SERVICE_ACCOUNT_KEY not configured, skipping delete"
           exit 0
         fi
         
-        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
         
         python3 << 'EOF'
-        import os, sys
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
+        import os, sys, json
+        from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
 
         file_id = os.getenv('DRIVE_FILE_ID')
-        client_id = os.getenv('OAUTH_CLIENT_ID')
-        client_secret = os.getenv('OAUTH_CLIENT_SECRET')
-        refresh_token = os.getenv('OAUTH_REFRESH_TOKEN')
+        service_account_json = os.getenv('DRIVE_SERVICE_ACCOUNT_KEY')
+
+        if not file_id:
+            print("❌ DRIVE_FILE_ID not set")
+            sys.exit(1)
+
+        if not service_account_json:
+            print("❌ DRIVE_SERVICE_ACCOUNT_KEY not set")
+            sys.exit(1)
 
         try:
-            creds = Credentials(
-                None,
-                refresh_token=refresh_token,
-                client_id=client_id,
-                client_secret=client_secret,
-                token_uri='https://oauth2.googleapis.com/token'
+            # Parse service account key
+            service_account_info = json.loads(service_account_json)
+            print(f"🔐 Using Service Account: {service_account_info.get('client_email', 'unknown')}")
+            
+            # Create credentials
+            creds = Credentials.from_service_account_info(
+                service_account_info,
+                scopes=['https://www.googleapis.com/auth/drive']
             )
-            creds.refresh(Request())
+            
             service = build('drive', 'v3', credentials=creds)
+            
+            print(f"🗑️ Deleting file: {file_id}")
             service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
             print(f"✅ File {file_id} deleted successfully!")
+            
         except HttpError as error:
             if error.resp.status == 404:
                 print(f"⚠️ File {file_id} not found (already deleted)")
+            elif error.resp.status == 403:
+                print(f"❌ Permission denied: {error}")
+                print("   💡 Chia sẻ file/folder với email của Service Account:")
+                try:
+                    info = json.loads(service_account_json)
+                    print(f"   → {info.get('client_email', 'unknown')}")
+                except:
+                    pass
+                sys.exit(1)
             else:
                 print(f"❌ Google API error: {error}")
                 sys.exit(1)
